@@ -257,10 +257,11 @@ public:
 					return false;
 				}
 				clear();
+				cursor = { 0,0 };
+				Console::getInstance().setCursorPos(cursor);
 				for (const auto& line :content ) {
 					std::cout << line << END_LINE<<std::endl;
 				}
-				cursor = { 0,0 };
 				Console::getInstance().setCursorPos(cursor);
 				return false; 
 			}},
