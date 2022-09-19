@@ -116,6 +116,9 @@ public:
 	inline auto setTitle(std::string title) {
 		SetConsoleTitleA(title.c_str());
 	}
+	inline auto setScrollSize(const Point<short> size)const {
+		SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE),{size.x,size.y});
+	}
 };
 class Command {
 private:
@@ -259,7 +262,15 @@ public:
 				clear();
 				cursor = { 0,0 };
 				Console::getInstance().setCursorPos(cursor);
-				for (const auto& line :content ) {
+				if (content.size() > screenSize.y) {
+					screenSize.y = content.size();
+					Console::getInstance().setScrollSize(screenSize);
+				}
+				for (const auto & line :content) {
+					if (line.size() > screenSize.x) {
+					    ++(screenSize.x= line.size());
+						Console::getInstance().setScrollSize(screenSize);
+					}
 					std::cout << line << END_LINE<<std::endl;
 				}
 				Console::getInstance().setCursorPos(cursor);
@@ -286,6 +297,10 @@ public:
 		Console::getInstance().scroll(range, cursor);
 		putchar(END_LINE);
 		Console::getInstance().setCursorPos(cursor);
+		if (Console::getInstance().read(screenSize.x, { 0,static_cast<decltype(screenSize.y)>(screenSize.y - 1) }).find('|') != std::string::npos) {
+			++screenSize.y;//find not of \0
+			Console::getInstance().setScrollSize(screenSize);
+		}
 		return true;
 	}
 	inline auto backspace() {
@@ -320,6 +335,10 @@ public:
 		range.size.x = screenSize.x;
 		range.pos.y = range.size.y = cursor.y;
 		cursor.x += IsDBCSLeadByte(c);
+		if (Console::getInstance().read(1/*END_LINE.size*/, { static_cast<decltype(screenSize.x)>(screenSize.x - 1),cursor.y }).front() == '|') {
+			++screenSize.x += IsDBCSLeadByte(c);
+			Console::getInstance().setScrollSize(screenSize);
+		}//task:ENABLE_MOUSE_INPUT 
 		Console::getInstance().scroll(range, cursor);
 		putchar(c);
 		if (!IsDBCSLeadByte(c))return;
