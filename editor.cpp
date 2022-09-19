@@ -3,8 +3,10 @@
 #include <windows.h>
 #include <string>
 #include <algorithm>
+#include <vector>
 #include <functional>
 #include <unordered_map>
+#include <fstream>
 #define Singleton(name) \
 private:\
 name() = default;\
@@ -27,7 +29,34 @@ struct Point {
 template <class T>
 struct Rect {
 	Point<T> pos,size;
-	//T width, height;
+};
+auto split(std::string str,const std::string cut) {
+	std::vector<decltype(str)> data;
+	for (auto pos = str.find(cut); pos != std::string::npos; pos = str.find(cut)) {
+		data.push_back(str.substr(0,pos));
+		str = str.substr(pos+cut.size());
+	}
+	if (!str.empty())data.push_back(str);
+	return std::move(data);
+}
+class File {
+private:
+	const std::string name;
+public:
+	File(decltype(name) name) :name(name) {
+
+	}
+	std::string read() {
+		std::fstream file(name.c_str());
+		if (!file)return "";
+		return std::string(std::istreambuf_iterator<decltype(name)::value_type >(file),std::istreambuf_iterator<decltype(name)::value_type>());
+	}
+	auto write(decltype(name) str) {
+		std::ofstream file(name.c_str());
+		if (!file)return false;
+		file << str;
+		return true;
+	}
 };
 class Console final {
 private:
@@ -40,9 +69,7 @@ public:
 		info.Char.AsciiChar = ' ';
 		_range.Left = range.pos.x;
 		_range.Right = range.size.x;
-		//_range.Right = range.width;
 		_range.Top = range.pos.y;
-		//_range.Bottom = range.height;
 		_range.Bottom = range.size.y;
 		ScrollConsoleScreenBuffer(GetStdHandle(STD_OUTPUT_HANDLE), &_range, nullptr, { pos.x,pos.y }, &info);
 		return *this;
@@ -90,6 +117,16 @@ public:
 		SetConsoleTitleA(title.c_str());
 	}
 };
+class Command {
+private:
+	std::unordered_map<std::string,std::function<bool(std::vector<std::string>)> > commands;
+public:
+	Command(decltype(commands) commands):commands(commands){}
+	auto operator[](std::vector<std::string> arguments) {
+		if (!commands.count(arguments.front()))return false;
+		return commands[arguments.front()](arguments);
+	}
+};
 template <class T>
 class KeyInput {
 private:
@@ -100,20 +137,49 @@ public:
 			auto c = _getch();
 			switch (c) {
 			case 0x1b:
-				if(!proccessor.esc())return proccessor;
+				if constexpr (requires(T instance) { instance.esc(); }) {
+					if (!proccessor.esc())return proccessor;
+				}
 				continue;
 			case 0x0d:
-				if(!proccessor.enter())return proccessor;
+				if constexpr (requires(T instance) { instance.enter(); }) {
+					if (!proccessor.enter())return proccessor;
+				}
 				continue;
 			case 8://backspace
-				proccessor.backspace();
+				if constexpr (requires(T instance) { instance.backspace(); }) {
+					proccessor.backspace();
+				}
 				continue;
 			}
 			if (224 != c) {
-				proccessor.insert(c);
+				if constexpr (requires(T instance) { instance.insert(c); }) {
+					proccessor.insert(c);//マルチバイト判断をこっちでやる
+				}
 				continue;
 			}
-			proccessor.arrow(_getch());
+			switch (_getch()) {
+			case 0x48://up
+				if constexpr (requires(T instance) { instance.up(); }) {
+					proccessor.up();
+				}
+				break;;
+			case 0x50://down
+				if constexpr (requires(T instance) { instance.down(); }) {
+					proccessor.down();
+				}
+				break;;
+			case 0x4b:
+				if constexpr (requires(T instance) { instance.left(); }) {
+					proccessor.left();
+				}
+				break;
+			case 0x4d://right
+				if constexpr (requires(T instance) { instance.right(); }) {
+					proccessor.right();
+				}
+				break;
+			}
 
 		}
 	}
@@ -121,12 +187,13 @@ public:
 class CmdLine {
 private:
 	inline static constexpr auto CURSOR = '|';
-	std::size_t pos;//KeyInputに渡すために
+	std::size_t pos;
 public:
 	CmdLine() {
 		Console::getInstance().setTitle(std::string(1, CURSOR));
 	}
 	auto esc() {
+		Console::getInstance().setTitle(std::string(1,CURSOR));//""だとアクセスエラー 
 		return false;
 	}
 	auto enter() {
@@ -150,98 +217,64 @@ public:
 		pos += add.size() - 1;
 		Console::getInstance().setTitle(text);
 	}
-	auto arrow(const char c) {
-		switch (c) {
-		case 0x4b:
-		{
-			if (pos <= 0)return;
-			auto text = Console::getInstance().getTitle();
-			text.erase(pos--, 1);
-			text.insert(pos -= pos > 0 ? IsDBCSLeadByte(text[pos - 1]) : false, 1, CURSOR);
-			Console::getInstance().setTitle(text);
-		}
-		break;;
-		case 0x4d:
-		{
-			auto text = Console::getInstance().getTitle();
-			if (text.size() - 1 <= pos)return;
-			text.erase(pos, 1);
-			text.insert(pos += IsDBCSLeadByte(text[pos++]), 1, CURSOR);
-			Console::getInstance().setTitle(text);
-		}
-		break;
-		}
-	}
 	auto getText() {
 		auto cmd = Console::getInstance().getTitle();
 		cmd.erase(pos,1);
-		//Console::getInstance().setTitle(Console::getInstance().getDefaultTitle());//L""
 		return std::move(cmd);
 	}
-	//std::string proccess() {
-	//	std::size_t pos=0;
-	//	while (true) {
-	//		auto c = _getch();
-	//		switch (c) {
-	//		case 0x1b:
-	//			return "";
-	//			break;
-	//		case 0x0d:
-	//		{
-	//			auto cmd = Console::getInstance().getTitle();
-	//			cmd.erase(pos,1);//next begin, pos
-	//			return std::move(cmd);
-	//		}
-	//		case 8://backspace
-	//		{
-
-	//		}
-	//			continue;
-	//		}
-	//		if (c != 224) {
-	//			auto text=Console::getInstance().getTitle();
-	//			text.erase(pos,1);//CURSOR.size()
-	//			std::string add(1,c);
-	//			if (IsDBCSLeadByte(c))add.push_back(_getch());
-	//			add.push_back(CURSOR);
-	//			text.insert(pos,add);
-	//			pos += add.size()-1;
-	//			//text.insert(pos,c,1);
-	//			Console::getInstance().setTitle(text);
-	//			continue;
-	//		}
-	//		switch (_getch()) {
-	//		case 0x4b:
-	//		{
-	//			if (pos <= 0)continue;
-	//			auto text = Console::getInstance().getTitle();
-	//			text.erase(pos--,1);
-	//			text.insert(pos-=pos>0?IsDBCSLeadByte(text[pos-1]) : false, 1, CURSOR);
-	//			Console::getInstance().setTitle(text);
-	//		}
-	//			continue;
-	//		case 0x4d:
-	//		{
-	//			auto text = Console::getInstance().getTitle();
-	//			if (text.size()-1 <= pos)continue;
-	//			text.erase(pos, 1);
-	//			text.insert(pos += IsDBCSLeadByte(text[pos++]), 1, CURSOR);
-	//			Console::getInstance().setTitle(text);
-	//		}
-	//			continue;
-	//		}
-	//		
-	//	}
-	//	return "";
-	//}
 };
 class TextEditor {
 private:
 	inline static constexpr auto END_LINE = '|';
 	Point<short> cursor,screenSize;
 public:
+	inline auto readAll() {
+		std::string text;
+		for (short y = 0;; ++y) {
+			const auto line = Console::getInstance().read(screenSize.x, { 0,y });
+			const auto endLine = line.find_last_of(END_LINE);
+			if (endLine == std::string::npos)return text.substr(0,text.size()-1/*\n size*/);
+			text.append(line.substr(0,endLine)+"\n");
+		}
+	}
+	inline auto clear() {
+		Console::getInstance().scroll({ {0,0},screenSize }, { 0,static_cast<decltype(screenSize.y)>(-screenSize.y)});
+	}
 	inline auto esc() {
-		return KeyInput<CmdLine>().input().getText() !="end";
+		const auto args = split(KeyInput<CmdLine>().input().getText()," ");
+		if (args.empty())return true;
+		return !Command({
+			{ "end",[](auto args) {return true; } },
+			{"read",[&](auto args) {
+				constexpr auto NAME = 1;
+				if (args.size() <= NAME) {
+					Console::getInstance().setTitle("error:Unspecified file name");
+					return false;
+				}
+				const auto content = split(File(args[NAME]).read(), "\n");
+				if (content.empty()) {
+					Console::getInstance().setTitle("hit:file no content");
+					return false;
+				}
+				clear();
+				for (const auto& line :content ) {
+					std::cout << line << END_LINE<<std::endl;
+				}
+				cursor = { 0,0 };
+				Console::getInstance().setCursorPos(cursor);
+				return false; 
+			}},
+			{"save",[&](auto args) {
+				constexpr auto NAME = 1;
+				if (args.size() <= NAME) {
+					Console::getInstance().setTitle("error:Unspecified file name");
+					return false;
+				}
+				Console::getInstance().setTitle(File(args[NAME]).write(readAll())?"success":"falid");
+				return false;
+			}},
+			}
+		)[args];
 	}
 	inline auto enter() {
 		Rect<short> range;
@@ -256,6 +289,7 @@ public:
 	}
 	inline auto backspace() {
 		if (!cursor.x) {
+			if (!cursor.y)return;
 			Rect<short> range;
 			range.size.x = screenSize.x;
 			range.size.y = (range.pos = cursor).y;
@@ -324,7 +358,9 @@ public:
 	inline auto right() {
 		const auto endLine = cursor.x + Console::getInstance().read(screenSize.x - cursor.x, cursor).find_last_of(END_LINE);
 		if (endLine == cursor.x) {
-			down();
+			if (Console::getInstance().read(screenSize.x, { 0,static_cast<decltype(cursor.y)>(cursor.y+1)}).find_last_of(END_LINE) == std::string::npos) return;
+			++cursor.y;
+			cursor.x = 0;
 		}
 		else if (endLine <= cursor.x)return;
 		else {
@@ -332,24 +368,9 @@ public:
 		}
 		Console::getInstance().setCursorPos(cursor);
 	}
-	inline auto arrow(const int c) {
-		switch (c) {
-		case 0x48://up
-			up();
-			break;;
-		case 0x50://down
-			down();
-			break;;
-		case 0x4b:
-			left();
-			break;
-		case 0x4d://right
-			right();
-			break;
-		}
-	}
 public:
 	TextEditor() {
+		clear();
 		putchar(END_LINE);
 		Console::getInstance().setCursorPos({0,0});
 		cursor = Console::getInstance().getCursorPos();
@@ -360,38 +381,5 @@ public:
 int main() {
 	KeyInput<TextEditor> editor;
 	editor.input();
-	//TextEditor editor;
-	//while (true) {
-	//    auto c = _getch();
-	//	switch (c) {
-	//	case 0x1b:
-	//		editor.esc();
-	//		continue;
-	//	case 0x0d:
-	//		editor.enter();
-	//	continue;
-	//	case 8://backspace
-	//		editor.backspace();
-	//	continue;
-	//	}
-	//	if (224 != c) {
-	//		editor.insert(c);
-	//		continue;
-	//	}
-	//	switch (_getch()) {
-	//	case 0x48://up
-	//		editor.up();
-	//		continue;
-	//	case 0x50://down
-	//		editor.down();
-	//		continue;
-	//	case 0x4b:
-	//		editor.left();
-	//		continue;
-	//	case 0x4d://right
-	//		editor.right();
-	//		continue;
-	//	}
-	//}
 	return EXIT_SUCCESS;
 }
