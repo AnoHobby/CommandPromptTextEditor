@@ -3,6 +3,8 @@
 #include <windows.h>
 #include <string>
 #include <algorithm>
+#include <functional>
+#include <unordered_map>
 #define Singleton(name) \
 private:\
 name() = default;\
@@ -70,13 +72,177 @@ public:
 		GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info);
 		return std::move(Point{ info.dwSize.X,info.dwSize.Y });
 	}
+	inline auto getTitle() {
+		std::string title;
+		title.resize(MAX_PATH);
+		title.resize(GetConsoleTitleA(title.data(),title.size()));
+		title.shrink_to_fit();
+		return std::move(title);
+	}
+	inline auto getDefaultTitle() {
+		std::string title;
+		title.resize(MAX_PATH);
+		title.resize(GetConsoleOriginalTitleA(title.data(), title.size()));
+		title.shrink_to_fit();
+		return std::move(title);
+	}
+	inline auto setTitle(std::string title) {
+		SetConsoleTitleA(title.c_str());
+	}
 };
+template <class T>
+class KeyInput {
+private:
+	T proccessor;
+public:
+	auto &input() {
+		while (true) {
+			auto c = _getch();
+			switch (c) {
+			case 0x1b:
+				if(!proccessor.esc())return proccessor;
+				continue;
+			case 0x0d:
+				if(!proccessor.enter())return proccessor;
+				continue;
+			case 8://backspace
+				proccessor.backspace();
+				continue;
+			}
+			if (224 != c) {
+				proccessor.insert(c);
+				continue;
+			}
+			proccessor.arrow(_getch());
 
+		}
+	}
+};
+class CmdLine {
+private:
+	inline static constexpr auto CURSOR = '|';
+	std::size_t pos;//KeyInputに渡すために
+public:
+	CmdLine() {
+		Console::getInstance().setTitle(std::string(1, CURSOR));
+	}
+	auto esc() {
+		return false;
+	}
+	auto enter() {
+		return false;
+	}
+	auto backspace() {
+		if (pos <= 0)return;
+		auto text = Console::getInstance().getTitle();
+		const auto isMultiByte =--pos>0?IsDBCSLeadByte(text[pos - 1]):false;
+		text.erase(pos-=isMultiByte, 1+isMultiByte);
+		Console::getInstance().setTitle(text);
+	}
+	auto insert(const char c) {
+		auto text = Console::getInstance().getTitle();
+		if (text.size() >= MAX_PATH)return;
+		text.erase(pos, 1);
+		std::string add(1, c);
+		if (IsDBCSLeadByte(c))add.push_back(_getch());
+		add.push_back(CURSOR);
+		text.insert(pos, add);
+		pos += add.size() - 1;
+		Console::getInstance().setTitle(text);
+	}
+	auto arrow(const char c) {
+		switch (c) {
+		case 0x4b:
+		{
+			if (pos <= 0)return;
+			auto text = Console::getInstance().getTitle();
+			text.erase(pos--, 1);
+			text.insert(pos -= pos > 0 ? IsDBCSLeadByte(text[pos - 1]) : false, 1, CURSOR);
+			Console::getInstance().setTitle(text);
+		}
+		break;;
+		case 0x4d:
+		{
+			auto text = Console::getInstance().getTitle();
+			if (text.size() - 1 <= pos)return;
+			text.erase(pos, 1);
+			text.insert(pos += IsDBCSLeadByte(text[pos++]), 1, CURSOR);
+			Console::getInstance().setTitle(text);
+		}
+		break;
+		}
+	}
+	auto getText() {
+		auto cmd = Console::getInstance().getTitle();
+		cmd.erase(pos,1);
+		//Console::getInstance().setTitle(Console::getInstance().getDefaultTitle());//L""
+		return std::move(cmd);
+	}
+	//std::string proccess() {
+	//	std::size_t pos=0;
+	//	while (true) {
+	//		auto c = _getch();
+	//		switch (c) {
+	//		case 0x1b:
+	//			return "";
+	//			break;
+	//		case 0x0d:
+	//		{
+	//			auto cmd = Console::getInstance().getTitle();
+	//			cmd.erase(pos,1);//next begin, pos
+	//			return std::move(cmd);
+	//		}
+	//		case 8://backspace
+	//		{
+
+	//		}
+	//			continue;
+	//		}
+	//		if (c != 224) {
+	//			auto text=Console::getInstance().getTitle();
+	//			text.erase(pos,1);//CURSOR.size()
+	//			std::string add(1,c);
+	//			if (IsDBCSLeadByte(c))add.push_back(_getch());
+	//			add.push_back(CURSOR);
+	//			text.insert(pos,add);
+	//			pos += add.size()-1;
+	//			//text.insert(pos,c,1);
+	//			Console::getInstance().setTitle(text);
+	//			continue;
+	//		}
+	//		switch (_getch()) {
+	//		case 0x4b:
+	//		{
+	//			if (pos <= 0)continue;
+	//			auto text = Console::getInstance().getTitle();
+	//			text.erase(pos--,1);
+	//			text.insert(pos-=pos>0?IsDBCSLeadByte(text[pos-1]) : false, 1, CURSOR);
+	//			Console::getInstance().setTitle(text);
+	//		}
+	//			continue;
+	//		case 0x4d:
+	//		{
+	//			auto text = Console::getInstance().getTitle();
+	//			if (text.size()-1 <= pos)continue;
+	//			text.erase(pos, 1);
+	//			text.insert(pos += IsDBCSLeadByte(text[pos++]), 1, CURSOR);
+	//			Console::getInstance().setTitle(text);
+	//		}
+	//			continue;
+	//		}
+	//		
+	//	}
+	//	return "";
+	//}
+};
 class TextEditor {
 private:
 	inline static constexpr auto END_LINE = '|';
 	Point<short> cursor,screenSize;
 public:
+	inline auto esc() {
+		return KeyInput<CmdLine>().input().getText() !="end";
+	}
 	inline auto enter() {
 		Rect<short> range;
 		range.pos = cursor;
@@ -86,7 +252,7 @@ public:
 		Console::getInstance().scroll(range, cursor);
 		putchar(END_LINE);
 		Console::getInstance().setCursorPos(cursor);
-
+		return true;
 	}
 	inline auto backspace() {
 		if (!cursor.x) {
@@ -113,7 +279,7 @@ public:
 			.scroll(range, { cursor.x -= IsDBCSLeadByte(Console::getInstance().read(2, { static_cast<decltype(cursor.x)>(cursor.x - 1),cursor.y }).front()),cursor.y })
 			.setCursorPos(cursor);
 	}
-	inline auto insert(char c) {
+	inline auto insert(const char c) {
 		Rect<decltype(SMALL_RECT::Left)> range;
 		range.pos.x = cursor.x++;
 		range.size.x = screenSize.x;
@@ -121,7 +287,7 @@ public:
 		cursor.x += IsDBCSLeadByte(c);
 		Console::getInstance().scroll(range, cursor);
 		putchar(c);
-		if (!IsDBCSLeadByte(c))return;//cinfo-curPos
+		if (!IsDBCSLeadByte(c))return;
 		putchar(_getch());
 	}
 	inline auto up() {
@@ -145,7 +311,7 @@ public:
 		Console::getInstance().setCursorPos(cursor);
 	}
 	inline auto left() {
-		if (cursor.y > 0/*upを使えばいいが、こちらの方が効率がいい*/ && !cursor.x) {
+		if (cursor.y > 0 && !cursor.x) {
 			--cursor.y;
 			cursor.x += Console::getInstance().read(screenSize.x - cursor.x, cursor).find_last_of(END_LINE);
 		}
@@ -166,6 +332,22 @@ public:
 		}
 		Console::getInstance().setCursorPos(cursor);
 	}
+	inline auto arrow(const int c) {
+		switch (c) {
+		case 0x48://up
+			up();
+			break;;
+		case 0x50://down
+			down();
+			break;;
+		case 0x4b:
+			left();
+			break;
+		case 0x4d://right
+			right();
+			break;
+		}
+	}
 public:
 	TextEditor() {
 		putchar(END_LINE);
@@ -176,147 +358,40 @@ public:
 };
 
 int main() {
-	TextEditor editor;
-	while (true) {
-		char c = _getch();
-		switch (c) {
-		case 0x0d:
-			editor.enter();
-		continue;
-		case 8://backspace
-			editor.backspace();
-		continue;
-		}
-		if (static_cast<decltype(c)>(224) != c) {
-			editor.insert(c);
-			continue;
-		}
-		switch (_getch()) {
-		case 0x48://up
-			editor.up();
-			continue;
-		case 0x50://down
-			editor.down();
-			continue;
-		case 0x4b:
-			editor.left();
-			continue;
-		case 0x4d://right
-			editor.right();
-			continue;
-		}
-	}
-	//std::cout << "|";
-	//SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), { 0,0 });
-	//SetConsoleCP(CP_ACP);
-	//CONSOLE_SCREEN_BUFFER_INFO info;
-	//GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info);
+	KeyInput<TextEditor> editor;
+	editor.input();
+	//TextEditor editor;
 	//while (true) {
-	//	char c = _getch();
+	//    auto c = _getch();
 	//	switch (c) {
 	//	case 0x1b:
-	//		//esc
+	//		editor.esc();
 	//		continue;
-	//	case 0x0d://enter
-	//	{
-	//		Rect<short> range;
-	//		range.pos.x = info.dwCursorPosition.X;
-	//		range.width = info.dwSize.X;
-	//		range.pos.y = info.dwCursorPosition.Y;
-	//		range.height = info.dwSize.Y;
-	//		Console::getInstance().scroll(range, { info.dwCursorPosition.X = 0,(++info.dwCursorPosition.Y) });
-	//		putchar('|');
-	//		SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), info.dwCursorPosition);
-	//	}
+	//	case 0x0d:
+	//		editor.enter();
 	//	continue;
 	//	case 8://backspace
-	//	{
-	//		if (!info.dwCursorPosition.X) {
-	//			Rect<short> range;
-	//			range.pos.x = info.dwCursorPosition.X;
-	//			range.width = info.dwSize.X;
-	//			range.pos.y = range.height = info.dwCursorPosition.Y;
-	//			auto content = Console::getInstance().read(info.dwSize.X, { info.dwCursorPosition.X,--info.dwCursorPosition.Y });
-	//			content = content.substr(0, content.find_last_of('|'));
-	//			info.dwCursorPosition.X = content.size();
-	//			SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), info.dwCursorPosition);
-	//			Console::getInstance().scroll(range, { info.dwCursorPosition.X,info.dwCursorPosition.Y });
-	//			++range.pos.y;
-	//			range.height = info.dwSize.Y;
-	//			Console::getInstance().scroll(range, { 0,static_cast<decltype(range.pos.y)>(range.pos.y - 1) });
-	//			continue;
-	//		}
-	//		Rect<short> range;
-	//		range.pos.x = info.dwCursorPosition.X--;
-	//		range.width = info.dwSize.X;
-	//		range.pos.y = range.height = info.dwCursorPosition.Y;
-	//		Console::getInstance().scroll(range, { info.dwCursorPosition.X -= IsDBCSLeadByte(Console::getInstance().read(2, { static_cast<decltype(info.dwCursorPosition.X)>(info.dwCursorPosition.X - 1),info.dwCursorPosition.Y }).front()),info.dwCursorPosition.Y });
-	//		SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), info.dwCursorPosition);
-	//	}
+	//		editor.backspace();
 	//	continue;
 	//	}
-	//	if (static_cast<decltype(c)>(224) != c) {
-	//		Rect<decltype(SMALL_RECT::Left)> range;
-	//		range.pos.x = info.dwCursorPosition.X++;
-	//		range.width = info.dwSize.X;
-	//		range.pos.y = range.height = info.dwCursorPosition.Y;
-	//		Console::getInstance().scroll(range, { info.dwCursorPosition.X += IsDBCSLeadByte(c),info.dwCursorPosition.Y });
-	//		putchar(c);
-	//		if (!IsDBCSLeadByte(c))continue;//cinfo-curPos
-	//		putchar(_getch());
+	//	if (224 != c) {
+	//		editor.insert(c);
 	//		continue;
 	//	}
 	//	switch (_getch()) {
 	//	case 0x48://up
-	//		if (info.dwCursorPosition.Y <= 0)continue;
-	//		info.dwCursorPosition.X -= IsDBCSLeadByte(Console::getInstance().read(2, { static_cast<decltype(info.dwCursorPosition.X)>(info.dwCursorPosition.X - 1),--info.dwCursorPosition.Y }).front());
-	//		{
-	//			const auto endLine = Console::getInstance().read(info.dwSize.X, { 0,info.dwCursorPosition.Y }).find_last_of('|');
-	//			if (!(endLine <= info.dwCursorPosition.X)) {
-	//				break;
-	//			}
-	//			info.dwCursorPosition.X = endLine;
-	//		}
-	//		break;
+	//		editor.up();
+	//		continue;
 	//	case 0x50://down
-	//		info.dwCursorPosition.X -= IsDBCSLeadByte(Console::getInstance().read(2, { static_cast<decltype(info.dwCursorPosition.X)>(info.dwCursorPosition.X - 1),++info.dwCursorPosition.Y }).front());
-	//		{
-	//			const auto endLine = Console::getInstance().read(info.dwSize.X, { 0,info.dwCursorPosition.Y }).find_last_of('|');
-	//			if (endLine == std::string::npos) {
-	//				--info.dwCursorPosition.Y;
-	//				break;
-	//			}
-	//			else if (!(endLine <= info.dwCursorPosition.X)) {
-	//				break;
-	//			}
-	//			info.dwCursorPosition.X = endLine;
-	//		}
-	//		break;//left
+	//		editor.down();
+	//		continue;
 	//	case 0x4b:
-	//		if (info.dwCursorPosition.Y > 0/*upを使えばいいが、こちらの方が効率がいい*/ && !info.dwCursorPosition.X) {
-	//			--info.dwCursorPosition.Y;
-	//			info.dwCursorPosition.X += Console::getInstance().read(info.dwSize.X - info.dwCursorPosition.X, { info.dwCursorPosition.X,info.dwCursorPosition.Y }).find_last_of('|');
-	//			break;
-	//		}
-	//		else if (info.dwCursorPosition.X <= 0)continue;
-	//		info.dwCursorPosition.X -= IsDBCSLeadByte(Console::getInstance().read(2, { static_cast<decltype(info.dwCursorPosition.X)>(--info.dwCursorPosition.X - 1),info.dwCursorPosition.Y }).front());
-	//		break;
+	//		editor.left();
+	//		continue;
 	//	case 0x4d://right
-	//	{
-	//		auto endLine = info.dwCursorPosition.X + Console::getInstance().read(info.dwSize.X - info.dwCursorPosition.X, { info.dwCursorPosition.X,info.dwCursorPosition.Y }).find_last_of('|');
-	//		if (endLine == info.dwCursorPosition.X) {
-	//			info.dwCursorPosition.X = 0;
-	//			++info.dwCursorPosition.Y;//call down
-	//			break;
-	//		}
-	//		else if (endLine <= info.dwCursorPosition.X)continue;//速度を気にするならば、行変更の時に変数に格納する
-	//	}
-	//	++info.dwCursorPosition.X += IsDBCSLeadByte(Console::getInstance().read(2, { info.dwCursorPosition.X,info.dwCursorPosition.Y }).front());
-	//	break;
-	//	default:
+	//		editor.right();
 	//		continue;
 	//	}
-	//	SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), info.dwCursorPosition);
 	//}
 	return EXIT_SUCCESS;
 }
