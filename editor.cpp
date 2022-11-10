@@ -153,8 +153,8 @@ public:
 		SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), oldMode);
 	}
 	template <class T, class... ArgT>
-	auto emplace(decltype(events)::key_type key, ArgT... args) {
-		events.emplace(key, std::make_unique<T>(args...));
+	auto emplace(decltype(events)::key_type key, ArgT&&... args) {
+		events.emplace(key, std::make_unique<T>(std::forward<ArgT...>(args)...));
 	}
 	auto input() {
 		while (true) {
@@ -267,6 +267,7 @@ private:
 		auto screen = Console::getInstance().getScreenSize();
 		Console::getInstance().scroll({ 0,0,screen.X,screen.Y }, { 0,static_cast<decltype(screen.Y)>(-screen.Y) });
 		putchar(END_LINE);
+		Console::getInstance().setCursorPos({ 0,0 });
 	}
 public:
 	TextEditor() {
@@ -437,7 +438,7 @@ public:
 };
 class KeyEvent:public Event{
 private:
-	TextEditor editor;//参照にするとcmd.runのmapの内容うまく読み込めない
+	TextEditor &editor;//参照にするとcmd.runのmapの内容うまく読み込めない
 public:
 	KeyEvent(decltype(editor) editor):editor(editor) {
 
