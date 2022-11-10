@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <sstream>
 #include <memory>
+#include <regex>
 #include <fstream>
 #define Singleton(name) \
 private:\
@@ -62,6 +63,13 @@ public:
 		ReadConsoleOutputCharacterA(GetStdHandle(STD_OUTPUT_HANDLE), content.data(), content.size(), pos, &length);
 		return std::move(content);
 	}
+	inline auto readColor(const std::size_t size, const COORD pos) {
+		std::vector<WORD> content;
+		DWORD length;
+		content.resize(size);
+		ReadConsoleOutputAttribute(GetStdHandle(STD_OUTPUT_HANDLE),content.data(), content.size(), pos, &length);
+		return std::move(content);
+	}
 	inline auto& setCursorPos(COORD pos) {
 		SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), pos);
 		return *this;
@@ -101,6 +109,29 @@ public:
 	inline auto setScrollSize(COORD size)const {
 		SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE),size);
 	}
+	//enum class COLOR {
+	//	BLACK = 0,
+	//	DARKBLUE = FOREGROUND_BLUE,
+	//	DARKGREEN = FOREGROUND_GREEN,
+	//	DARKCYAN = FOREGROUND_GREEN | FOREGROUND_BLUE,
+	//	DARKRED = FOREGROUND_RED,
+	//	DARKMAGENTA = FOREGROUND_RED | FOREGROUND_BLUE,
+	//	DARKYELLOW = FOREGROUND_RED | FOREGROUND_GREEN,
+	//	DARKGRAY = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
+	//	GRAY = FOREGROUND_INTENSITY,
+	//	BLUE = FOREGROUND_INTENSITY | FOREGROUND_BLUE,
+	//	GREEN = FOREGROUND_INTENSITY | FOREGROUND_GREEN,
+	//	CYAN = FOREGROUND_INTENSITY | FOREGROUND_GREEN | FOREGROUND_BLUE,
+	//	RED = FOREGROUND_INTENSITY | FOREGROUND_RED,
+	//	MAGENTA = FOREGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_BLUE,
+	//	YELLOW = FOREGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_GREEN,
+	//	WHITE = FOREGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
+	//};
+
+	inline auto& setColor(WORD color, DWORD length,COORD pos) {
+		FillConsoleOutputAttribute(GetStdHandle(STD_OUTPUT_HANDLE), color, length, pos, &length);
+		return *this;
+	}
 };
 
 class Event {
@@ -116,7 +147,7 @@ private:
 public:
 	Input() {
 		GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &oldMode);
-		SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);//ENABLE_ECHO_INPUT |ENABLE_LINE_INPUT |ENABLE_QUICK_EDIT_MODE| ENABLE_INSERT_MODE|
+		SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), ENABLE_PROCESSED_INPUT |ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);//ENABLE_ECHO_INPUT |ENABLE_LINE_INPUT |ENABLE_QUICK_EDIT_MODE| ENABLE_INSERT_MODE|
 	}
 	~Input() {
 		SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), oldMode);
@@ -136,24 +167,136 @@ public:
 		}
 	}
 };
+class CommandMode{
+private:
+	static constexpr auto CURSOR = '|';
+	std::size_t pos;
+public:
+	CommandMode() {
+		Console::getInstance().setTitle(std::string(1,CURSOR));
+	}
+	auto cancel() {
+		Console::getInstance().setTitle("");
+	}
+	auto backspace() {
+		if (pos <= 0)return;
+		auto text = Console::getInstance().getTitle();
+		const auto isMultiByte = --pos > 0 ? IsDBCSLeadByte(text[pos - 1]) : false;
+		text.erase(pos -= isMultiByte, 1 + isMultiByte);
+		Console::getInstance().setTitle(text);
+	}
+	auto insert(const char c) {
+		auto text = Console::getInstance().getTitle();
+		if (text.size() >= MAX_PATH)return;
+		text.erase(pos, 1);
+		std::string add(1, c);
+		if (IsDBCSLeadByte(c))add.push_back(_getch());
+		add.push_back(CURSOR);
+		text.insert(pos, add);
+		pos += add.size() - 1;
+		Console::getInstance().setTitle(text);
+	}
+	auto left() {
+		if (!pos)return;
+		auto text=Console::getInstance().getTitle();
+		std::swap(text[pos], text[pos-1]);
+		--pos;
+		Console::getInstance().setTitle(text);
+	}
+	auto right() {
+		auto text = Console::getInstance().getTitle();
+		if (text.size()-1 <= pos)return;
+		std::swap(text[pos],text[pos+1]);
+		++pos;
+		Console::getInstance().setTitle(text);
+	}
+	auto enter() {
+		auto text=Console::getInstance().getTitle();
+		text.erase(pos);
+		Console::getInstance().setTitle(text);
+	}
+};
+class Split {
+private:
+	std::string str,
+		        separator;
+public:
+	Split(decltype(str) str,decltype(str) separator):str(str),separator(separator) {}
+	const auto next() {
+		const auto found = str.find_first_of(separator);
+		if (found == std::string::npos)return std::exchange(str,"");
+		const auto item = str.substr(0,found);
+		str.erase(0,found+separator.size());
+		return std::move(item);
+	}
+	auto get() {
+		const auto found = str.find_first_of(separator);
+		if (found == std::string::npos)return std::string();
+		return std::move(str.substr(0, found));
+	}
+};
+class Command {
+private:
+	static constexpr auto SEPARATOR = " ";
+	std::unordered_map<std::string, std::function<std::string(Split&)> > commands;
+public:
+	template <class keyT,class valueT>
+	auto emplace(keyT key,valueT value) {
+		commands.emplace(key,value);
+	}
+	auto operator[](std::string str) {
+		Split split(std::move(str), SEPARATOR);
+		if (!commands.count(split.get()))return std::string("error:command not found");
+		return commands.at(split.next())(split);
+	}
+};
 class TextEditor {
 private:
 	static constexpr auto END_LINE = '|';
+	Command cmd;
 	inline auto readAll() {
 		std::string text;
 		for (short y = 0;; ++y) {
-			const auto line = Console::getInstance().read(Console::getInstance().getScreenSize().X, {0,y});
+			const auto line = Console::getInstance().read(Console::getInstance().getScreenSize().X, { 0,y });
 			const auto endLine = line.find_last_of(END_LINE);
-			if (endLine == std::string::npos)return text.substr(0,text.size()-1/*\n size*/);
-			text.append(line.substr(0,endLine)+"\n");
+			if (endLine == std::string::npos)return text.substr(0, text.size() - 1/*\n size*/);
+			text.append(line.substr(0, endLine) + "\n");
 		}
 	}
-public:
-	TextEditor() {
+	auto reset() {
 		auto screen = Console::getInstance().getScreenSize();
 		Console::getInstance().scroll({ 0,0,screen.X,screen.Y }, { 0,static_cast<decltype(screen.Y)>(-screen.Y) });
 		putchar(END_LINE);
-		Console::getInstance().setCursorPos({0,0});
+	}
+public:
+	TextEditor() {
+		reset();
+		Console::getInstance().setCursorPos({ 0,0 });
+		cmd.emplace(
+			"save",
+			[this](Split& args) {
+				return File(args.next()).write(readAll()) ? Console::getInstance().getDefaultTitle() : "failed";
+			}
+		);
+		cmd.emplace(
+			"read",
+			[this](Split& args) {
+				reset();
+				auto text = File(args.next()).read();
+				text.push_back('\n');
+				for (auto pos = text.find_first_of('\n'); pos != std::string::npos; text.erase(0, pos + 1), pos = text.find_first_of('\n')) {
+					if (Console::getInstance().getScreenSize().X < pos) {
+						Console::getInstance().setScrollSize({ static_cast<short>(pos),Console::getInstance().getScreenSize().Y });
+					}
+					std::cout << text.substr(0, pos) << END_LINE << std::endl;
+				}
+				return Console::getInstance().setCursorPos({0,0}).getDefaultTitle();
+
+			}
+		);
+	}
+	auto run(std::string text) {
+		Console::getInstance().setTitle(std::move(cmd[std::move(text)]));
 	}
 	auto enter() {
 		auto cursor = Console::getInstance().getCursorPos();
@@ -188,53 +331,32 @@ public:
 		Console::getInstance().setCursorPos(pos);
 	}
 	inline auto up() {
-		auto cursor = Console::getInstance().getCursorPos();
-		if (cursor.Y <= 0)return;
-		cursor.X -= IsDBCSLeadByte(Console::getInstance().read(2, { static_cast<decltype(cursor.X)>(cursor.X - 1),--cursor.Y }).front());
-		const auto endLine = Console::getInstance().read(Console::getInstance().getScreenSize().X, {0,cursor.Y}).find_last_of(END_LINE);
-		if (endLine <= cursor.X) {
-			cursor.X = endLine;
-		}
-		Console::getInstance().setCursorPos(cursor);
+		auto cursor=Console::getInstance().getCursorPos();
+		--cursor.Y;
+		move(cursor);
 	}
 	inline auto down() {
 		auto cursor = Console::getInstance().getCursorPos();
-		cursor.X -= IsDBCSLeadByte(Console::getInstance().read(2, { static_cast<decltype(cursor.X)>(cursor.X - 1),++cursor.Y }).front());
-		const auto endLine = Console::getInstance().read(Console::getInstance().getScreenSize().X, { 0,cursor.Y }).find_last_of(END_LINE);
-		if (endLine == std::string::npos) {
-			--cursor.Y;
-		}
-		else if (endLine <= cursor.X) {
-			cursor.X = endLine;
-		}
-		Console::getInstance().setCursorPos(cursor);
+		++cursor.Y;
+		move(cursor);
 	}
 	auto left() {
 		auto cursor = Console::getInstance().getCursorPos();
-		if (cursor.Y > 0 && !cursor.X) {
-			--cursor.Y;
-			cursor.X = Console::getInstance().read(Console::getInstance().getScreenSize().X, cursor).find_last_of(END_LINE);
-		}
-		else if (cursor.X < 0)return;
-		else {
-			cursor.X -= 2;
-			cursor.X += !IsDBCSLeadByte(Console::getInstance().read(2, cursor).front());
-		}
-		Console::getInstance().setCursorPos(cursor);
+		--cursor.X;
+		move(cursor);
+		if (cursor.X==Console::getInstance().getCursorPos().X)return;
+		--cursor.Y;
+		cursor.X = Console::getInstance().getScreenSize().X;
+		move(cursor);
 	}
 	inline auto right() {
 		auto cursor = Console::getInstance().getCursorPos();
-		const auto endLine = cursor.X+ Console::getInstance().read(Console::getInstance().getScreenSize().X - cursor.X, cursor).find_last_of(END_LINE);
-		if (endLine == cursor.X) {
-			if (Console::getInstance().read(Console::getInstance().getScreenSize().X, { 0,static_cast<decltype(cursor.Y)>(cursor.Y + 1) }).find_last_of(END_LINE) == std::string::npos) return;
-			++cursor.Y;
-			cursor.X = 0;
-		}
-		else if (endLine <= cursor.X)return;
-		else {
-			++cursor.X += IsDBCSLeadByte(Console::getInstance().read(2, cursor).front());
-		}
-		Console::getInstance().setCursorPos(cursor);
+		++cursor.X;
+		move(cursor);
+		if (cursor.X == Console::getInstance().getCursorPos().X)return;
+		++cursor.Y;
+		cursor.X = 0;
+		move(cursor);
 	}
 	auto backspace() {
 		auto cursor = Console::getInstance().getCursorPos();
@@ -282,17 +404,50 @@ public:
 		putchar(c);
 	}
 };
-
+class CommandModeKeyEvent :public Event {
+private:
+	CommandMode cmd;
+public:
+	bool excute(Event::eventT e) {
+		if (!e.KeyEvent.bKeyDown)return false;
+		switch (e.KeyEvent.wVirtualKeyCode) {
+		case VK_MENU:
+			cmd.cancel();
+			return true;
+			break;
+		case VK_RETURN:
+			cmd.enter();
+			return true;
+			break;
+		case VK_LEFT:
+			cmd.left();
+			break;
+		case VK_RIGHT:
+			cmd.right();
+			break;
+		case VK_BACK:
+			cmd.backspace();
+			break;
+		default:
+			cmd.insert(e.KeyEvent.uChar.AsciiChar);
+			break;
+		}
+		return false;
+	}
+};
 class KeyEvent:public Event{
 private:
-	TextEditor &editor;
+	TextEditor editor;//ŽQÆ‚É‚·‚é‚Æcmd.run‚Ìmap‚Ì“à—e‚¤‚Ü‚­“Ç‚Ýž‚ß‚È‚¢
 public:
-	KeyEvent(decltype(editor) editor) :editor(editor) {
+	KeyEvent(decltype(editor) editor):editor(editor) {
 
 	}
 	bool excute(Event::eventT e)override {
 		if (!e.KeyEvent.bKeyDown)return false;
 		switch (e.KeyEvent.wVirtualKeyCode) {
+		case VK_ESCAPE:
+			return true;
+			break;
 		case VK_RETURN:
 			editor.enter();
 			break;
@@ -311,6 +466,14 @@ public:
 		case VK_BACK:
 			editor.backspace();
 			break;
+		case VK_MENU:
+		{
+			Input input;
+			input.emplace<CommandModeKeyEvent>(KEY_EVENT);
+			input.input();
+			editor.run(std::move(Console::getInstance().getTitle()));
+		}
+			break;
 		default:
 			editor.insert(e.KeyEvent.uChar.AsciiChar);
 		}
@@ -323,7 +486,10 @@ private:
 public:
 	MouseEvent(decltype(editor) editor):editor(editor){}
 	bool excute(Event::eventT e) {
-		if (e.MouseEvent.dwButtonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
+/*		if (e.MouseEvent.dwEventFlags == MOUSE_MOVED && e.MouseEvent.dwButtonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
+			Console::getInstance().setColor(~Console::getInstance().readColor(1,e.MouseEvent.dwMousePosition).front(), 1, e.MouseEvent.dwMousePosition);
+		}
+		else */if (e.MouseEvent.dwButtonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
 			editor.move(e.MouseEvent.dwMousePosition);
 		}
 		return false;
