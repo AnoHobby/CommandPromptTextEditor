@@ -109,28 +109,14 @@ public:
 	inline auto setScrollSize(COORD size)const {
 		SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE),size);
 	}
-	//enum class COLOR {
-	//	BLACK = 0,
-	//	DARKBLUE = FOREGROUND_BLUE,
-	//	DARKGREEN = FOREGROUND_GREEN,
-	//	DARKCYAN = FOREGROUND_GREEN | FOREGROUND_BLUE,
-	//	DARKRED = FOREGROUND_RED,
-	//	DARKMAGENTA = FOREGROUND_RED | FOREGROUND_BLUE,
-	//	DARKYELLOW = FOREGROUND_RED | FOREGROUND_GREEN,
-	//	DARKGRAY = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
-	//	GRAY = FOREGROUND_INTENSITY,
-	//	BLUE = FOREGROUND_INTENSITY | FOREGROUND_BLUE,
-	//	GREEN = FOREGROUND_INTENSITY | FOREGROUND_GREEN,
-	//	CYAN = FOREGROUND_INTENSITY | FOREGROUND_GREEN | FOREGROUND_BLUE,
-	//	RED = FOREGROUND_INTENSITY | FOREGROUND_RED,
-	//	MAGENTA = FOREGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_BLUE,
-	//	YELLOW = FOREGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_GREEN,
-	//	WHITE = FOREGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
-	//};
-
 	inline auto& setColor(WORD color, DWORD length,COORD pos) {
 		FillConsoleOutputAttribute(GetStdHandle(STD_OUTPUT_HANDLE), color, length, pos, &length);
 		return *this;
+	}
+	inline auto getMode() {
+		DWORD mode;
+		GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode);
+		return std::move(mode);
 	}
 };
 
@@ -147,7 +133,8 @@ private:
 public:
 	Input() {
 		GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &oldMode);
-		SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), ENABLE_PROCESSED_INPUT |ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);//ENABLE_ECHO_INPUT |ENABLE_LINE_INPUT |ENABLE_QUICK_EDIT_MODE| ENABLE_INSERT_MODE|
+		//selectを自作する場合,ctrl+cがEND_LINEの"|"もコピーしてしまうのでENABLE_PROCESSED_INPUTは入れない
+		SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE),  ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);//ENABLE_ECHO_INPUT |ENABLE_LINE_INPUT |ENABLE_QUICK_EDIT_MODE| ENABLE_INSERT_MODE|
 	}
 	~Input() {
 		SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), oldMode);
@@ -176,7 +163,7 @@ public:
 		Console::getInstance().setTitle(std::string(1,CURSOR));
 	}
 	auto cancel() {
-		Console::getInstance().setTitle("");
+		Console::getInstance().setTitle("cancel");
 	}
 	auto backspace() {
 		if (pos <= 0)return;
@@ -231,7 +218,7 @@ public:
 	}
 	auto get() {
 		const auto found = str.find_first_of(separator);
-		if (found == std::string::npos)return std::string();
+		if (found == std::string::npos)return str;
 		return std::move(str.substr(0, found));
 	}
 };
@@ -251,9 +238,12 @@ public:
 	}
 };
 class TextEditor {
-private:
+public:
 	static constexpr auto END_LINE = '|';
+private:
+	static constexpr auto NO_SELECT = -1;
 	Command cmd;
+	COORD selectBegin;
 	inline auto readAll() {
 		std::string text;
 		for (short y = 0;; ++y) {
@@ -263,6 +253,24 @@ private:
 			text.append(line.substr(0, endLine) + "\n");
 		}
 	}
+	auto read(COORD& start, COORD& end) {
+		std::string text = std::move(Console::getInstance().read(Console::getInstance().getScreenSize().X, start));
+		const auto found = text.find_last_of(END_LINE);
+		if (start.Y == end.Y && end.X-start.X < found) {
+			return std::move(text.erase(end.X-start.X, text.size() - end.X+start.X));
+		}
+		text.erase(found, text.size()-found).push_back('\n');
+		++start.Y;
+		start.X = 0;
+		for (; start.Y < end.Y; ++start.Y)
+		{
+			auto line = Console::getInstance().read(Console::getInstance().getScreenSize().X, start);
+			const auto found = line.find_last_of(END_LINE);
+			line.erase(found, line.size()-found).push_back('\n');
+			text.append(std::move(line));
+		}
+		return std::move(text.append(std::move(Console::getInstance().read(end.X, { 0,end.Y }))));
+	}
 	auto reset() {
 		auto screen = Console::getInstance().getScreenSize();
 		Console::getInstance().scroll({ 0,0,screen.X,screen.Y }, { 0,static_cast<decltype(screen.Y)>(-screen.Y) });
@@ -270,7 +278,35 @@ private:
 		Console::getInstance().setCursorPos({ 0,0 });
 	}
 public:
+	auto selectRange() {
+		if (Console::getInstance().getCursorPos().Y < selectBegin.Y || (Console::getInstance().getCursorPos().Y == selectBegin.Y && (Console::getInstance().getCursorPos().X < selectBegin.X))) {
+			return std::make_pair(Console::getInstance().getCursorPos(), selectBegin);//swap
+		}
+		return std::make_pair(selectBegin, Console::getInstance().getCursorPos());
+	}
+	auto cancelSelect() {
+		auto range = selectRange();
+		for (
+			decltype(range.first.X) x = range.first.X,
+			y = range.first.Y,
+			length = range.first.X + Console::getInstance().read(Console::getInstance().getScreenSize().X, range.first).find_last_of(END_LINE);//editor.getend
+			y < range.second.Y;
+			++y,
+			x = 0,
+			length=Console::getInstance().read(Console::getInstance().getScreenSize().X, { x,y }).find_last_of(END_LINE)
+			)
+		{
+			for (; x < length; ++x) {
+				Console::getInstance().setColor(~Console::getInstance().readColor(1, { x,y }).front(), 1, { x,y });
+			}
+		}
+		for (decltype(range.first.X) x = 0; x < range.second.X; ++x) {
+			Console::getInstance().setColor(~Console::getInstance().readColor(1, { x,range.second.Y }).front(), 1, { x,range.second.Y });
+		}
+		selectBegin.X = NO_SELECT;
+	}
 	TextEditor() {
+		cancelSelect();
 		reset();
 		Console::getInstance().setCursorPos({ 0,0 });
 		cmd.emplace(
@@ -293,6 +329,12 @@ public:
 				}
 				return Console::getInstance().setCursorPos({0,0}).getDefaultTitle();
 
+			}
+		);
+		cmd.emplace(
+		"cancel",
+			[this](Split& args) {
+				return Console::getInstance().getDefaultTitle();
 			}
 		);
 	}
@@ -390,6 +432,21 @@ public:
 		Console::getInstance().scroll(range, { 0,static_cast<decltype(range.Top)>(range.Top - 1) });
 
 	}
+	auto insert(std::string str) {
+		auto cursor = Console::getInstance().getCursorPos();
+		auto screen = Console::getInstance().getScreenSize();
+		SMALL_RECT range;
+		range.Left = cursor.X;
+		range.Right = screen.X;
+		range.Top = range.Bottom = cursor.Y;
+		cursor.X += str.size();
+		if (Console::getInstance().read(screen.X, { 0,cursor.Y }).find_last_of(END_LINE)<=str.size()) {
+			screen.X+=str.size();
+			Console::getInstance().setScrollSize(screen);
+		}
+		Console::getInstance().scroll(range, cursor);
+		std::cout << str;
+	}
 	auto insert(const char c) {
 		auto cursor = Console::getInstance().getCursorPos();
 		auto screen = Console::getInstance().getScreenSize();
@@ -403,6 +460,45 @@ public:
 		}
 		Console::getInstance().scroll(range, cursor);
 		putchar(c);
+	}
+
+	auto deleteSelect() {
+		auto range=selectRange();
+		Console::getInstance()
+			.setCursorPos(range.first)
+			.scroll(
+			{
+				range.second.X,
+				range.second.Y,
+				Console::getInstance().getScreenSize().X,
+				range.second.Y
+			},
+			range.first
+		)
+			.scroll(
+			{
+				0,
+				++range.second.Y,
+				Console::getInstance().getScreenSize().X,
+				Console::getInstance().getScreenSize().Y
+			},
+			{0,++range.first.Y}
+		);
+		selectBegin.X = NO_SELECT;
+
+	}
+   	inline auto is_selecting() {
+		return selectBegin.X != NO_SELECT;
+	}
+	auto select(decltype(selectBegin) pos) {
+		if (!is_selecting()) {
+			selectBegin = pos;
+			return;
+		}
+	}
+	auto getSelect() {
+		auto range = selectRange();
+		return std::move(read(range.first,range.second));
 	}
 };
 class CommandModeKeyEvent :public Event {
@@ -438,33 +534,82 @@ public:
 };
 class KeyEvent:public Event{
 private:
-	TextEditor &editor;//参照にするとcmd.runのmapの内容うまく読み込めない
+	TextEditor &editor;
 public:
 	KeyEvent(decltype(editor) editor):editor(editor) {
 
 	}
 	bool excute(Event::eventT e)override {
 		if (!e.KeyEvent.bKeyDown)return false;
+		if (e.KeyEvent.wVirtualKeyCode=='C' && (e.KeyEvent.dwControlKeyState == LEFT_CTRL_PRESSED || e.KeyEvent.dwControlKeyState == RIGHT_CTRL_PRESSED)&& OpenClipboard(nullptr)) {
+			const auto data = editor.getSelect();
+			//HGLOBAL textData = GlobalAlloc(GHND,data.size()+1);
+			//data.copy(static_cast<PSTR>(GlobalLock(textData)),data.size());
+			//GlobalUnlock(textData);
+			EmptyClipboard();
+			SetClipboardData(CF_TEXT, (void*)(&data[0]));
+			CloseClipboard();
+			return false;
+		}
+		else if (e.KeyEvent.wVirtualKeyCode == 'V' && (e.KeyEvent.dwControlKeyState == LEFT_CTRL_PRESSED || e.KeyEvent.dwControlKeyState == RIGHT_CTRL_PRESSED) && OpenClipboard(nullptr)) {
+			Split split(static_cast<const char*>(GetClipboardData(CF_TEXT)),"\r\n");
+			CloseClipboard();
+			while (true) {
+				editor.insert(split.next());
+				if (split.get().empty())break;
+				editor.enter();
+			}
+		}
+
 		switch (e.KeyEvent.wVirtualKeyCode) {
 		case VK_ESCAPE:
 			return true;
 			break;
 		case VK_RETURN:
+			if (editor.is_selecting()) {
+				editor.deleteSelect();
+			}
 			editor.enter();
 			break;
 		case VK_UP:
+			if (editor.is_selecting()) {
+				const auto left = editor.selectRange().first;
+				editor.cancelSelect();
+				Console::getInstance().setCursorPos(left);
+			}
 			editor.up();
 			break;
 		case VK_DOWN:
+			if (editor.is_selecting()) {
+				const auto right = editor.selectRange().second;
+				editor.cancelSelect();
+				Console::getInstance().setCursorPos(right);
+			}
 			editor.down();
 			break;
 		case VK_LEFT:
+			if (editor.is_selecting()) {
+				const auto left = editor.selectRange().first;
+				editor.cancelSelect();
+				Console::getInstance().setCursorPos(left);
+				break;
+			}
 			editor.left();
 			break;
 		case VK_RIGHT:
+			if (editor.is_selecting()) {
+				const auto right = editor.selectRange().second;
+				editor.cancelSelect();
+				Console::getInstance().setCursorPos(right);
+				break;
+			}
 			editor.right();
 			break;
 		case VK_BACK:
+			if (editor.is_selecting()) {
+				editor.deleteSelect();
+				break;
+			}
 			editor.backspace();
 			break;
 		case VK_MENU:
@@ -476,22 +621,76 @@ public:
 		}
 			break;
 		default:
-			editor.insert(e.KeyEvent.uChar.AsciiChar);
+			if (!(e.KeyEvent.dwControlKeyState == SHIFT_PRESSED || !e.KeyEvent.dwControlKeyState))break;
+			if (editor.is_selecting()) {
+				editor.deleteSelect();
+			}
+			editor.insert(e.KeyEvent.uChar.AsciiChar);//selectされているときにeditorへの参照先を変えるとifで切り替えなくてもいい
 		}
 		return false;
 	}
 };
 class MouseEvent:public Event{
 private:
+	enum class MOTION {
+		ANY,
+		LEFT,
+		RIGHT
+	};
 	TextEditor& editor;
+	COORD before;
+	MOTION motion;
 public:
-	MouseEvent(decltype(editor) editor):editor(editor){}
+	MouseEvent(decltype(editor) editor):editor(editor){
+	
+	}
 	bool excute(Event::eventT e) {
-/*		if (e.MouseEvent.dwEventFlags == MOUSE_MOVED && e.MouseEvent.dwButtonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
-			Console::getInstance().setColor(~Console::getInstance().readColor(1,e.MouseEvent.dwMousePosition).front(), 1, e.MouseEvent.dwMousePosition);
-		}
-		else */if (e.MouseEvent.dwButtonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
+		if (e.MouseEvent.dwButtonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
 			editor.move(e.MouseEvent.dwMousePosition);
+		}
+		if (e.MouseEvent.dwEventFlags == MOUSE_MOVED && e.MouseEvent.dwButtonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
+			if (editor.is_selecting()&& before.Y != Console::getInstance().getCursorPos().Y) {
+				auto changeColors=[this](auto start,auto end) mutable{
+					for (
+						decltype(start.X) x = start.X,
+						y = start.Y,
+						length = start.X + Console::getInstance().read(Console::getInstance().getScreenSize().X, start).find_last_of(editor.END_LINE);//editor.getend
+						y < end.Y;
+						++y,
+						x = 0,
+						length=Console::getInstance().read(Console::getInstance().getScreenSize().X, { x,y }).find_last_of(editor.END_LINE)
+						)
+					{
+						for (; x < length; ++x) {
+							Console::getInstance().setColor(~Console::getInstance().readColor(1, { x,y }).front(), 1, { x,y });
+						}
+					}
+					for (decltype(start.X) x = 0; x < end.X; ++x) {
+						Console::getInstance().setColor(~Console::getInstance().readColor(1, { x,end.Y }).front(), 1, { x,end.Y });
+					}
+				};
+				if (before.Y < Console::getInstance().getCursorPos().Y) {
+					changeColors(before,Console::getInstance().getCursorPos());
+				}
+				else {
+					changeColors(Console::getInstance().getCursorPos(),before);
+				}
+			}
+			else if (editor.is_selecting() &&(before.X != Console::getInstance().getCursorPos().X )) {
+				const auto changeColors = [this](auto start, auto end) {
+					for (auto x = start; x < end; ++x) {
+						Console::getInstance().setColor(~Console::getInstance().readColor(1, {x,before.Y}).front(), 1, {x,before.Y});
+					}
+				};
+				if (before.X < Console::getInstance().getCursorPos().X) {
+					changeColors(before.X, Console::getInstance().getCursorPos().X);
+				}
+				else {
+					changeColors(Console::getInstance().getCursorPos().X,before.X);
+				}
+			}
+			before = Console::getInstance().getCursorPos();
+			editor.select(Console::getInstance().getCursorPos());
 		}
 		return false;
 	}
