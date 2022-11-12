@@ -221,6 +221,9 @@ public:
 		if (found == std::string::npos)return str;
 		return std::move(str.substr(0, found));
 	}
+	auto empty() {
+		return str.empty();
+	}
 };
 class Command {
 private:
@@ -543,20 +546,18 @@ public:
 		if (!e.KeyEvent.bKeyDown)return false;
 		if (e.KeyEvent.wVirtualKeyCode=='C' && (e.KeyEvent.dwControlKeyState == LEFT_CTRL_PRESSED || e.KeyEvent.dwControlKeyState == RIGHT_CTRL_PRESSED)&& OpenClipboard(nullptr)) {
 			const auto data = editor.getSelect();
-			//HGLOBAL textData = GlobalAlloc(GHND,data.size()+1);
-			//data.copy(static_cast<PSTR>(GlobalLock(textData)),data.size());
-			//GlobalUnlock(textData);
 			EmptyClipboard();
 			SetClipboardData(CF_TEXT, (void*)(&data[0]));
 			CloseClipboard();
 			return false;
 		}
 		else if (e.KeyEvent.wVirtualKeyCode == 'V' && (e.KeyEvent.dwControlKeyState == LEFT_CTRL_PRESSED || e.KeyEvent.dwControlKeyState == RIGHT_CTRL_PRESSED) && OpenClipboard(nullptr)) {
+			if(editor.is_selecting())editor.deleteSelect();
 			Split split(static_cast<const char*>(GetClipboardData(CF_TEXT)),"\r\n");
 			CloseClipboard();
 			while (true) {
 				editor.insert(split.next());
-				if (split.get().empty())break;
+				if (split.empty())break;
 				editor.enter();
 			}
 		}
