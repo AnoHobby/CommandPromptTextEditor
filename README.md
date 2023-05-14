@@ -1,1 +1,1 @@
-# CUI_TextEditor
+# CommandTextEditor
