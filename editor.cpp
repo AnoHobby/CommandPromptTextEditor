@@ -365,14 +365,14 @@ public:
 			Console::getInstance().setScrollSize(screen);
 		}
 	}
-	inline auto move(COORD pos) {
+	inline auto move(COORD pos,const decltype(pos.X) shift=-1) {
 		const auto line = Console::getInstance().read(Console::getInstance().getScreenSize().X, { 0,pos.Y });
 		const short endLine = line.find_last_of(END_LINE);
 		if (endLine <= pos.X) {
 			pos.X = endLine;
 		}
 		if (IsDBCSLeadByte(line[pos.X-1])) {
-			--pos.X;
+			pos.X+=shift;
 		}
 		Console::getInstance().setCursorPos(pos);
 	}
@@ -398,7 +398,7 @@ public:
 	inline auto right() {
 		auto cursor = Console::getInstance().getCursorPos();
 		++cursor.X;
-		move(cursor);
+		move(cursor,1);
 		if (cursor.X == Console::getInstance().getCursorPos().X)return;
 		++cursor.Y;
 		cursor.X = 0;
