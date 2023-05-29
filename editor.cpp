@@ -49,11 +49,12 @@ class Console final {
 private:
 	Singleton(Console);
 public:
-	inline auto& scroll(SMALL_RECT range, const COORD pos) noexcept(ScrollConsoleScreenBuffer) {
+	
+	inline auto& scroll(SMALL_RECT range, const COORD pos )noexcept(ScrollConsoleScreenBuffer) {
 		CHAR_INFO info;
 		info.Attributes = 0;
 		info.Char.AsciiChar = ' ';
-		ScrollConsoleScreenBuffer(GetStdHandle(STD_OUTPUT_HANDLE), &range, nullptr,pos, &info);
+		ScrollConsoleScreenBuffer(GetStdHandle(STD_OUTPUT_HANDLE), &range,nullptr,pos, &info);
 		return *this;
 	}
 	inline auto read(const std::size_t size, const COORD pos) {
@@ -545,13 +546,21 @@ public:
 	bool excute(Event::eventT e)override {
 		if (!e.KeyEvent.bKeyDown)return false;
 		if (e.KeyEvent.wVirtualKeyCode=='C' && (e.KeyEvent.dwControlKeyState == LEFT_CTRL_PRESSED || e.KeyEvent.dwControlKeyState == RIGHT_CTRL_PRESSED)&& OpenClipboard(nullptr)) {
-			const auto data = editor.getSelect();
 			EmptyClipboard();
-			SetClipboardData(CF_TEXT, (void*)(&data[0]));
+			const auto data = editor.getSelect();
+			auto copy = GlobalAlloc(GMEM_MOVEABLE,data.size());
+			if (!copy) {
+				CloseClipboard();
+				return false;
+			}
+			auto strCopy = GlobalLock(copy);
+			memcpy(strCopy,&data.front(),data.size());
+			GlobalUnlock(copy);
+			SetClipboardData(CF_TEXT,copy);
 			CloseClipboard();
 			return false;
 		}
-		else if (e.KeyEvent.wVirtualKeyCode == 'V' && (e.KeyEvent.dwControlKeyState == LEFT_CTRL_PRESSED || e.KeyEvent.dwControlKeyState == RIGHT_CTRL_PRESSED) && OpenClipboard(nullptr)) {
+		else if (e.KeyEvent.wVirtualKeyCode == 'V' && (e.KeyEvent.dwControlKeyState == LEFT_CTRL_PRESSED || e.KeyEvent.dwControlKeyState == RIGHT_CTRL_PRESSED) && IsClipboardFormatAvailable (CF_TEXT) && OpenClipboard(nullptr)) {
 			if(editor.is_selecting())editor.deleteSelect();
 			Split split(static_cast<const char*>(GetClipboardData(CF_TEXT)),"\r\n");
 			CloseClipboard();
