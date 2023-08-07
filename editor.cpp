@@ -230,11 +230,12 @@ public:
 		}
 		return std::move(text.append(std::move(Console::getInstance().read(end.X, { 0,end.Y }))));
 	}
-	auto reset() {
+	auto &reset() {
 		auto screen = Console::getInstance().getScreenSize();
 		Console::getInstance().scroll({ 0,0,screen.X,screen.Y }, { 0,static_cast<decltype(screen.Y)>(-screen.Y) });
 		putchar(END_LINE);
 		Console::getInstance().setCursorPos({ 0,0 });
+		return *this;
 	}
 	auto enter() {
 		auto cursor = Console::getInstance().getCursorPos();
@@ -445,6 +446,31 @@ public:
 		reverse(end.X);
 		return std::move(text);
 	}
+	inline auto &write(const std::string&& text) {
+		Split split(std::move(text), "\n");
+		while (true) {
+			insert(split.next());
+			if (split.empty())break;
+			enter();
+		}
+		return *this;
+	}
+};
+class Command {
+private:
+	using FunctionT = std::function<bool(Split&)> ;
+	const FunctionT not_found_callback;
+	std::unordered_map<std::string, FunctionT > commands;
+public:
+	Command(decltype(not_found_callback) callback):not_found_callback(callback){}
+	auto emplace(const decltype(commands)::key_type &command,const decltype(commands)::mapped_type &function) {
+		commands.emplace(command,function);
+	}
+	auto excute(const std::string text) {
+		Split data(std::move(text), " ");
+		if (data.empty()|| !commands.contains(data.get()))return not_found_callback(data);//std::move
+		return commands[data.get()]((data.next(),data));
+	}
 };
 class Event {
 private:
@@ -506,6 +532,10 @@ public:
 				Console::getInstance().setTitleW(title);
 			}
 			break;
+		case VK_BACK:
+			if (!pos)break;
+			Console::getInstance().setTitle(Console::getInstance().getTitle().erase(--pos,1));
+			break;
 		case VK_RETURN:
 			Console::getInstance().setTitleW(Console::getInstance().getTitleW().erase(pos));
 			return true;
@@ -522,7 +552,29 @@ public:
 };
 class KeyEvent :public Event {
 private:
+	Command cmd;
 public:
+	KeyEvent():cmd([](Split& data){
+		Console::getInstance().setTitle("not found:"+data.get());
+		return false;
+		}) {
+		cmd.emplace("save", [](Split& data) {
+			if (data.empty())return false;
+			File file(data.get());
+			file.write(ConsoleEditor::getInstance().readAll());
+			return false;
+			});
+		cmd.emplace("open", [](Split& data) {
+			if (data.empty())return false;
+			ConsoleEditor::getInstance()
+				.reset()
+				.write(File(data.get()).read());
+			return false;
+			});
+		cmd.emplace("exit", [](Split& data) {
+			return true;
+			});
+	}
 	bool excute(eventType e)override {
 		if (!e.KeyEvent.bKeyDown)return false;
 		const auto isControll = [&e](const decltype(e.KeyEvent.wVirtualKeyCode) key) {
@@ -540,12 +592,7 @@ public:
 		}
 		else if (isControll('V')) {
 			if (ConsoleEditor::getInstance().is_selecting())ConsoleEditor::getInstance().deleteSelect();
-			Split split(Clipboard::getInstance().getData(), "\n");
-			while (true) {
-				ConsoleEditor::getInstance().insert(split.next());
-				if (split.empty())break;
-				ConsoleEditor::getInstance().enter();
-			}
+			ConsoleEditor::getInstance().write(std::move(Clipboard::getInstance().getData()));
 			return false;
 		}
 		switch (e.KeyEvent.wVirtualKeyCode) {
@@ -554,10 +601,7 @@ public:
 			ConsoleInput input;
 			input.emplace<TitleKeyEvent>(KEY_EVENT);
 			input.loopW();
-			/*todo:excute command*/
-			if (Console::getInstance().getTitle() == "exit") {
-				return true;
-			}
+			return cmd.excute(Console::getInstance().getTitle());
 		}
 			break;
 		case VK_RETURN:
@@ -604,8 +648,9 @@ public:
 };
 int main() {
 	const auto mode = Console::getInstance().getMode();
-	Console::getInstance().setMode(ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);
-	Console::getInstance().setCodePage(CP_ACP);
+	Console::getInstance()
+		.setMode(ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT)
+	    .setCodePage(CP_ACP);
 	ConsoleInput input;
 	input.emplace<KeyEvent>(KEY_EVENT);
 	input.emplace<MouseEvent>(MOUSE_EVENT);
