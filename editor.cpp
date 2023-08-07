@@ -25,7 +25,42 @@ public:\
 		return instance;\
 	}\
 private:
-
+template <std::ranges::range T>
+auto adjacent_split(const T range) {
+	std::vector<std::pair<std::ranges::range_value_t<T>, std::size_t> > data;
+	if (range.empty())return data;
+	data.emplace_back(range.front(), 0);
+	for (auto & i:range) {
+		if (i == data.back().first) {
+			++data.back().second;
+			continue;
+		}
+		data.emplace_back(i,1);
+	}
+	return std::move(data);
+}
+class Split {
+private:
+	std::string str,
+		separator;
+public:
+	Split(decltype(str) str, decltype(str) separator) :str(str), separator(separator) {}
+	const auto next() {
+		const auto found = str.find_first_of(separator);
+		if (found == std::string::npos)return std::exchange(str, "");
+		const auto item = str.substr(0, found);
+		str.erase(0, found + separator.size());
+		return std::move(item);
+	}
+	auto get() {
+		const auto found = str.find_first_of(separator);
+		if (found == std::string::npos)return str;
+		return std::move(str.substr(0, found));
+	}
+	auto empty() {
+		return str.empty();
+	}
+};
 class File {
 private:
 	const std::string name;
@@ -36,7 +71,7 @@ public:
 	std::string read() {
 		std::fstream file(name.c_str());
 		if (!file)return "";
-		return std::string(std::istreambuf_iterator<decltype(name)::value_type >(file),std::istreambuf_iterator<decltype(name)::value_type>());
+		return std::move(std::string(std::istreambuf_iterator<decltype(name)::value_type >(file), std::istreambuf_iterator<decltype(name)::value_type>()));
 	}
 	auto write(decltype(name) str) {
 		std::ofstream file(name.c_str());
@@ -49,12 +84,12 @@ class Console final {
 private:
 	Singleton(Console);
 public:
-	
-	inline auto& scroll(SMALL_RECT range, const COORD pos )noexcept(ScrollConsoleScreenBuffer) {
+
+	inline auto& scroll(SMALL_RECT range, const COORD pos)noexcept(ScrollConsoleScreenBuffer) {
 		CHAR_INFO info;
 		info.Attributes = 0;
 		info.Char.AsciiChar = ' ';
-		ScrollConsoleScreenBuffer(GetStdHandle(STD_OUTPUT_HANDLE), &range,nullptr,pos, &info);
+		ScrollConsoleScreenBuffer(GetStdHandle(STD_OUTPUT_HANDLE), &range, nullptr, pos, &info);
 		return *this;
 	}
 	inline auto read(const std::size_t size, const COORD pos) {
@@ -68,7 +103,7 @@ public:
 		std::vector<WORD> content;
 		DWORD length;
 		content.resize(size);
-		ReadConsoleOutputAttribute(GetStdHandle(STD_OUTPUT_HANDLE),content.data(), content.size(), pos, &length);
+		ReadConsoleOutputAttribute(GetStdHandle(STD_OUTPUT_HANDLE), content.data(), content.size(), pos, &length);
 		return std::move(content);
 	}
 	inline auto& setCursorPos(COORD pos) {
@@ -85,7 +120,7 @@ public:
 		GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info);
 		return info.dwCursorPosition;
 	}
-	inline auto getScreenSize() {//分けると二回呼び出しているので効率が悪い
+	inline auto getScreenSize() {
 		CONSOLE_SCREEN_BUFFER_INFO info;
 		GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info);
 		return info.dwSize;
@@ -93,7 +128,14 @@ public:
 	inline auto getTitle() {
 		std::string title;
 		title.resize(MAX_PATH);
-		title.resize(GetConsoleTitleA(title.data(),title.size()));
+		title.resize(GetConsoleTitleA(title.data(), title.size()));
+		title.shrink_to_fit();
+		return std::move(title);
+	}
+	inline auto getTitleW() {
+		std::wstring title;
+		title.resize(MAX_PATH);
+		title.resize(GetConsoleTitleW(title.data(), title.size()));
 		title.shrink_to_fit();
 		return std::move(title);
 	}
@@ -107,147 +149,60 @@ public:
 	inline auto setTitle(std::string title) {
 		SetConsoleTitleA(title.c_str());
 	}
-	inline auto setScrollSize(COORD size)const {
-		SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE),size);
+
+	inline auto setTitleW(std::wstring title) {
+		SetConsoleTitleW(title.c_str());
 	}
-	inline auto& setColor(WORD color, DWORD length,COORD pos) {
+	inline auto setScrollSize(COORD size)const {
+		SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), size);
+	}
+	inline auto& setColor(WORD color, DWORD length, COORD pos) {
 		FillConsoleOutputAttribute(GetStdHandle(STD_OUTPUT_HANDLE), color, length, pos, &length);
 		return *this;
 	}
 	inline auto getMode() {
 		DWORD mode;
 		GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode);
-		return std::move(mode);
+		return mode;
 	}
-};
-
-class Event {
+	inline auto &setMode(const DWORD mode) {
+		SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), mode);
+		return *this;
+	}
+};		
+class Clipboard {
 private:
+	Singleton(Clipboard);
 public:
-	using eventT = decltype(INPUT_RECORD::Event)&;
-	virtual bool excute(eventT) = 0;
-};
-class Input {
-private:
-	std::unordered_map<DWORD, std::unique_ptr<Event> > events;
-	DWORD oldMode;
-public:
-	Input() {
-		GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &oldMode);
-		//selectを自作する場合,ctrl+cがEND_LINEの"|"もコピーしてしまうのでENABLE_PROCESSED_INPUTは入れない
-		SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE),  ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);//ENABLE_ECHO_INPUT |ENABLE_LINE_INPUT |ENABLE_QUICK_EDIT_MODE| ENABLE_INSERT_MODE|
-	}
-	~Input() {
-		SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), oldMode);
-	}
-	template <class T, class... ArgT>
-	auto emplace(decltype(events)::key_type key, ArgT&&... args) {
-		events.emplace(key, std::make_unique<T>(std::forward<ArgT...>(args)...));
-	}
-	auto input() {
-		while (true) {
-			INPUT_RECORD record;
-			DWORD length;
-			if (!ReadConsoleInputA(GetStdHandle(STD_INPUT_HANDLE), &record, 1, &length) || !events.count(record.EventType)) {
-				continue;
-			}
-			if (events[record.EventType]->excute(record.Event))break;
+	auto setString(const std::string text) {
+		if (!OpenClipboard(nullptr))return false;
+		EmptyClipboard();
+		const auto copy = GlobalAlloc(GMEM_MOVEABLE, text.size());
+		if (!copy) {
+			CloseClipboard();
+			return false;
 		}
+		auto strCopy = GlobalLock(copy);
+		memcpy(strCopy, &text.front(), text.size());
+		GlobalUnlock(copy);
+		SetClipboardData(CF_TEXT, copy);
+		CloseClipboard();
+		return true;
+	}
+	auto getData() {
+		if (!OpenClipboard(nullptr))return "";
+		const auto data=GetClipboardData(CF_TEXT);
+		CloseClipboard();
+		return static_cast<const char*>(data);
 	}
 };
-class CommandMode{
+class ConsoleEditor {
 private:
-	static constexpr auto CURSOR = '|';
-	std::size_t pos;
+	Singleton(ConsoleEditor);
+	COORD base={-1}, before;
 public:
-	CommandMode() {
-		Console::getInstance().setTitle(std::string(1,CURSOR));
-	}
-	auto cancel() {
-		Console::getInstance().setTitle("cancel");
-	}
-	auto backspace() {
-		if (pos <= 0)return;
-		auto text = Console::getInstance().getTitle();
-		const auto isMultiByte = --pos > 0 ? IsDBCSLeadByte(text[pos - 1]) : false;
-		text.erase(pos -= isMultiByte, 1 + isMultiByte);
-		Console::getInstance().setTitle(text);
-	}
-	auto insert(const char c) {
-		auto text = Console::getInstance().getTitle();
-		if (text.size() >= MAX_PATH)return;
-		text.erase(pos, 1);
-		std::string add(1, c);
-		if (IsDBCSLeadByte(c))add.push_back(_getch());
-		add.push_back(CURSOR);
-		text.insert(pos, add);
-		pos += add.size() - 1;
-		Console::getInstance().setTitle(text);
-	}
-	auto left() {
-		if (!pos)return;
-		auto text=Console::getInstance().getTitle();
-		std::swap(text[pos], text[pos-1]);
-		--pos;
-		Console::getInstance().setTitle(text);
-	}
-	auto right() {
-		auto text = Console::getInstance().getTitle();
-		if (text.size()-1 <= pos)return;
-		std::swap(text[pos],text[pos+1]);
-		++pos;
-		Console::getInstance().setTitle(text);
-	}
-	auto enter() {
-		auto text=Console::getInstance().getTitle();
-		text.erase(pos);
-		Console::getInstance().setTitle(text);
-	}
-};
-class Split {
-private:
-	std::string str,
-		        separator;
-public:
-	Split(decltype(str) str,decltype(str) separator):str(str),separator(separator) {}
-	const auto next() {
-		const auto found = str.find_first_of(separator);
-		if (found == std::string::npos)return std::exchange(str,"");
-		const auto item = str.substr(0,found);
-		str.erase(0,found+separator.size());
-		return std::move(item);
-	}
-	auto get() {
-		const auto found = str.find_first_of(separator);
-		if (found == std::string::npos)return str;
-		return std::move(str.substr(0, found));
-	}
-	auto empty() {
-		return str.empty();
-	}
-};
-class Command {
-private:
-	static constexpr auto SEPARATOR = " ";
-	std::unordered_map<std::string, std::function<std::string(Split&)> > commands;
-public:
-	template <class keyT,class valueT>
-	auto emplace(keyT key,valueT value) {
-		commands.emplace(key,value);
-	}
-	auto operator[](std::string str) {
-		Split split(std::move(str), SEPARATOR);
-		if (!commands.count(split.get()))return std::string("error:command not found");
-		return commands.at(split.next())(split);
-	}
-};
-class TextEditor {
-public:
+	
 	static constexpr auto END_LINE = '|';
-private:
-	static constexpr auto NO_SELECT = -1;
-	Command cmd;
-	COORD selectBegin;
 	inline auto readAll() {
 		std::string text;
 		for (short y = 0;; ++y) {
@@ -260,17 +215,17 @@ private:
 	auto read(COORD& start, COORD& end) {
 		std::string text = std::move(Console::getInstance().read(Console::getInstance().getScreenSize().X, start));
 		const auto found = text.find_last_of(END_LINE);
-		if (start.Y == end.Y && end.X-start.X < found) {
-			return std::move(text.erase(end.X-start.X, text.size() - end.X+start.X));
+		if (start.Y == end.Y && end.X - start.X < found) {
+			return std::move(text.erase(end.X - start.X, text.size() - end.X + start.X));
 		}
-		text.erase(found, text.size()-found).push_back('\n');
+		text.erase(found, text.size() - found).push_back('\n');
 		++start.Y;
 		start.X = 0;
 		for (; start.Y < end.Y; ++start.Y)
 		{
 			auto line = Console::getInstance().read(Console::getInstance().getScreenSize().X, start);
 			const auto found = line.find_last_of(END_LINE);
-			line.erase(found, line.size()-found).push_back('\n');
+			line.erase(found, line.size() - found).push_back('\n');
 			text.append(std::move(line));
 		}
 		return std::move(text.append(std::move(Console::getInstance().read(end.X, { 0,end.Y }))));
@@ -280,70 +235,6 @@ private:
 		Console::getInstance().scroll({ 0,0,screen.X,screen.Y }, { 0,static_cast<decltype(screen.Y)>(-screen.Y) });
 		putchar(END_LINE);
 		Console::getInstance().setCursorPos({ 0,0 });
-	}
-public:
-	auto selectRange() {
-		if (Console::getInstance().getCursorPos().Y < selectBegin.Y || (Console::getInstance().getCursorPos().Y == selectBegin.Y && (Console::getInstance().getCursorPos().X < selectBegin.X))) {
-			return std::make_pair(Console::getInstance().getCursorPos(), selectBegin);//swap
-		}
-		return std::make_pair(selectBegin, Console::getInstance().getCursorPos());
-	}
-	auto cancelSelect() {
-		auto range = selectRange();
-		for (
-			decltype(range.first.X) x = range.first.X,
-			y = range.first.Y,
-			length = range.first.X + Console::getInstance().read(Console::getInstance().getScreenSize().X, range.first).find_last_of(END_LINE);//editor.getend
-			y < range.second.Y;
-			++y,
-			x = 0,
-			length=Console::getInstance().read(Console::getInstance().getScreenSize().X, { x,y }).find_last_of(END_LINE)
-			)
-		{
-			for (; x < length; ++x) {
-				Console::getInstance().setColor(~Console::getInstance().readColor(1, { x,y }).front(), 1, { x,y });
-			}
-		}
-		for (decltype(range.first.X) x = 0; x < range.second.X; ++x) {
-			Console::getInstance().setColor(~Console::getInstance().readColor(1, { x,range.second.Y }).front(), 1, { x,range.second.Y });
-		}
-		selectBegin.X = NO_SELECT;
-	}
-	TextEditor() {
-		cancelSelect();
-		reset();
-		Console::getInstance().setCursorPos({ 0,0 });
-		cmd.emplace(
-			"save",
-			[this](Split& args) {
-				return File(args.next()).write(readAll()) ? Console::getInstance().getDefaultTitle() : "failed";
-			}
-		);
-		cmd.emplace(
-			"read",
-			[this](Split& args) {
-				reset();
-				auto text = File(args.next()).read();
-				text.push_back('\n');
-				for (auto pos = text.find_first_of('\n'); pos != std::string::npos; text.erase(0, pos + 1), pos = text.find_first_of('\n')) {
-					if (Console::getInstance().getScreenSize().X < pos) {
-						Console::getInstance().setScrollSize({ static_cast<short>(pos),Console::getInstance().getScreenSize().Y });
-					}
-					std::cout << text.substr(0, pos) << END_LINE << std::endl;
-				}
-				return Console::getInstance().setCursorPos({0,0}).getDefaultTitle();
-
-			}
-		);
-		cmd.emplace(
-		"cancel",
-			[this](Split& args) {
-				return Console::getInstance().getDefaultTitle();
-			}
-		);
-	}
-	auto run(std::string text) {
-		Console::getInstance().setTitle(std::move(cmd[std::move(text)]));
 	}
 	auto enter() {
 		auto cursor = Console::getInstance().getCursorPos();
@@ -366,44 +257,62 @@ public:
 			Console::getInstance().setScrollSize(screen);
 		}
 	}
-	inline auto move(COORD pos,const decltype(pos.X) shift=-1) {
-		const auto line = Console::getInstance().read(Console::getInstance().getScreenSize().X, { 0,pos.Y });
-		const short endLine = line.find_last_of(END_LINE);
-		if (endLine <= pos.X) {
-			pos.X = endLine;
-		}
-		if (IsDBCSLeadByte(line[pos.X-1])) {
-			pos.X+=shift;
+	inline auto getEndLine(COORD pos) {
+		for (pos.X = Console::getInstance().getScreenSize().X; 0 <= pos.X && Console::getInstance().read(1, pos).front() != END_LINE; --pos.X) {}
+		return pos.X;
+	}
+
+	inline auto move(COORD pos) {
+		const auto endLine = getEndLine(pos);
+		if (endLine < pos.X)pos.X = endLine;
+		else if (IsDBCSLeadByte(Console::getInstance().read(2, { static_cast<decltype(pos.X)>(pos.X - 1),pos.Y }).front())) {
+			--pos.X;
 		}
 		Console::getInstance().setCursorPos(pos);
 	}
-	inline auto up() {
-		auto cursor=Console::getInstance().getCursorPos();
+	
+	inline auto &up() {
+		auto cursor = Console::getInstance().getCursorPos();
+		if (!cursor.Y)return *this;
 		--cursor.Y;
 		move(cursor);
+		return *this;
 	}
-	inline auto down() {
+	inline auto &down() {
 		auto cursor = Console::getInstance().getCursorPos();
 		++cursor.Y;
 		move(cursor);
+		return *this;
 	}
-	auto left() {
+	auto &left() {
 		auto cursor = Console::getInstance().getCursorPos();
-		--cursor.X;
-		move(cursor);
-		if (cursor.X==Console::getInstance().getCursorPos().X)return;
-		--cursor.Y;
-		cursor.X = Console::getInstance().getScreenSize().X;
-		move(cursor);
+		if (cursor.X) {
+			cursor.X -= 1 + IsDBCSLeadByte(Console::getInstance().read(2, { static_cast<decltype(cursor.X)>(cursor.X - 2),cursor.Y }).front());
+		}
+		else if (!cursor.Y)return *this;
+		else {
+			--cursor.Y;
+			for (cursor.X = Console::getInstance().getScreenSize().X; 0 <= cursor.X&& Console::getInstance().read(1, cursor).front() != END_LINE; --cursor.X) {}
+		}
+		Console::getInstance().setCursorPos(cursor);
+		return *this;
 	}
-	inline auto right() {
+	inline auto &right() {
 		auto cursor = Console::getInstance().getCursorPos();
-		++cursor.X;
-		move(cursor,1);
-		if (cursor.X == Console::getInstance().getCursorPos().X)return;
-		++cursor.Y;
-		cursor.X = 0;
-		move(cursor);
+		if (IsDBCSLeadByte(Console::getInstance().read(2, cursor).front())) {
+			cursor.X += 2;
+		}
+		else if(cursor.X<getEndLine(cursor))++cursor.X;
+		else{
+			for (short i = 0; i < Console::getInstance().getScreenSize().X; ++i) {
+				if (Console::getInstance().read(1, { i,static_cast<decltype(cursor.Y)>(1 + cursor.Y) }).front() == ' ')continue;
+				cursor.X = 0;
+				++cursor.Y;
+				break;
+			}
+		}
+		Console::getInstance().setCursorPos(cursor);
+		return *this;
 	}
 	auto backspace() {
 		auto cursor = Console::getInstance().getCursorPos();
@@ -444,8 +353,8 @@ public:
 		range.Right = screen.X;
 		range.Top = range.Bottom = cursor.Y;
 		cursor.X += str.size();
-		if (Console::getInstance().read(screen.X, { 0,cursor.Y }).find_last_of(END_LINE)<=str.size()) {
-			screen.X+=str.size();
+		if (Console::getInstance().read(screen.X, { 0,cursor.Y }).find_last_of(END_LINE) <= str.size()) {
+			screen.X += str.size();
 			Console::getInstance().setScrollSize(screen);
 		}
 		Console::getInstance().scroll(range, cursor);
@@ -458,258 +367,250 @@ public:
 		range.Left = cursor.X++;
 		range.Right = screen.X;
 		range.Top = range.Bottom = cursor.Y;
-		if (Console::getInstance().read(1/*END_LINE.size*/, { static_cast<decltype(screen.X)>(screen.X - 1),cursor.Y }).front() == END_LINE) {
+		if (Console::getInstance().read(1, { static_cast<decltype(screen.X)>(screen.X - 1),cursor.Y }).front() == END_LINE) {
 			++screen.X;
 			Console::getInstance().setScrollSize(screen);
 		}
 		Console::getInstance().scroll(range, cursor);
 		putchar(c);
 	}
-
-	auto deleteSelect() {
-		auto range=selectRange();
-		Console::getInstance()
-			.setCursorPos(range.first)
-			.scroll(
-			{
-				range.second.X,
-				range.second.Y,
-				Console::getInstance().getScreenSize().X,
-				range.second.Y
-			},
-			range.first
-		)
-			.scroll(
-			{
-				0,
-				++range.second.Y,
-				Console::getInstance().getScreenSize().X,
-				Console::getInstance().getScreenSize().Y
-			},
-			{0,++range.first.Y}
-		);
-		selectBegin.X = NO_SELECT;
-
-	}
-   	inline auto is_selecting() {
-		return selectBegin.X != NO_SELECT;
-	}
-	auto select(decltype(selectBegin) pos) {
-		if (!is_selecting()) {
-			selectBegin = pos;
-			return;
+	auto &reverseColor(COORD start,COORD end) {
+		if (end.Y < start.Y || (start.Y == end.Y && end.X < start.X))std::swap(start,end);
+		const auto reverse = [&start](const auto size) {
+			for (auto& [color, size] : adjacent_split(Console::getInstance().readColor(size - start.X, start))) {
+				Console::getInstance().setColor(~color, size, start);
+				start.X += size;
+			}
+		};
+		for (; start.Y < end.Y; ++start.Y) {
+			reverse(getEndLine(start)+1 );
+			start.X = 0;
 		}
+		start.Y = end.Y;
+		reverse(end.X);
+		return *this;
+	}
+	auto is_selecting()const{
+		return base.X != -1;
+	}
+	auto &select() {
+		if (is_selecting() && (before.X != Console::getInstance().getCursorPos().X || before.Y != Console::getInstance().getCursorPos().Y))ConsoleEditor::getInstance().reverseColor(before, Console::getInstance().getCursorPos());
+		before = Console::getInstance().getCursorPos();
+		if (!is_selecting())base = before;
+		return *this;
+	}
+	auto& cancelSelect() {
+		reverseColor(base,before);
+		base.X = -1;
+		return*this;
+	}
+	auto deleteSelect() {
+		if (before.Y < base.Y || (base.Y == before.Y && before.X < base.X))std::swap(base, before);
+		Console::getInstance()
+			.setCursorPos(base)
+			.scroll(
+				{
+					before.X,
+					before.Y,
+					Console::getInstance().getScreenSize().X,
+					before.Y
+				},
+				base
+			)
+			.scroll(
+				{
+					0,
+					++before.Y,
+					Console::getInstance().getScreenSize().X,
+					Console::getInstance().getScreenSize().Y
+				},
+				{ 0,++base.Y }
+		);
+		base.X = -1;
+
 	}
 	auto getSelect() {
-		auto range = selectRange();
-		return std::move(read(range.first,range.second));
+		auto start = base, end = before;
+		if (end.Y < start.Y || (start.Y == end.Y && end.X < start.X))std::swap(start, end);
+		std::string text;
+		const auto reverse = [&start,&text](const auto size) {
+			text+=std::move(Console::getInstance().read(size - start.X, start));
+			text.back() = '\n';
+		};
+		for (; start.Y < end.Y; ++start.Y) {
+			reverse(getEndLine(start) + 1);
+			start.X = 0;
+		}
+		start.Y = end.Y;
+		reverse(end.X);
+		return std::move(text);
 	}
 };
-class CommandModeKeyEvent :public Event {
+class Event {
 private:
-	CommandMode cmd;
 public:
-	bool excute(Event::eventT e) {
+	using eventType = decltype(INPUT_RECORD::Event)&;
+	virtual bool excute(eventType) = 0;
+};
+class ConsoleInput {
+private:
+	std::unordered_map<DWORD, std::unique_ptr<Event> > callbacks;
+public:
+	template <class T,class... Args>
+	auto emplace(decltype(callbacks)::key_type type,Args&&... args) {
+		callbacks.emplace(type, std::make_unique<T>(std::forward<Args...>(args)...));
+	}
+#define LOOP_GENERATOR(ascii_or_wide) \
+    auto loop##ascii_or_wide() {\
+	INPUT_RECORD record;\
+	DWORD length;\
+	while (\
+		!(\
+			ReadConsoleInput##ascii_or_wide(GetStdHandle(STD_INPUT_HANDLE), &record, 1, &length)\
+			&&\
+			callbacks.contains(record.EventType)\
+			&& callbacks.at(record.EventType)->excute(record.Event)\
+			)\
+		) {\
+	}\
+	return;\
+	}
+	LOOP_GENERATOR(A)
+	LOOP_GENERATOR(W)
+#undef LOOP_GENERATOR
+};
+class TitleKeyEvent :public Event{
+private:
+	std::size_t pos=0;
+public:
+	TitleKeyEvent() {
+		Console::getInstance().setTitle("|");
+	}
+	bool excute(eventType e)override {
 		if (!e.KeyEvent.bKeyDown)return false;
 		switch (e.KeyEvent.wVirtualKeyCode) {
-		case VK_MENU:
-			cmd.cancel();
-			return true;
-			break;
-		case VK_RETURN:
-			cmd.enter();
-			return true;
-			break;
 		case VK_LEFT:
-			cmd.left();
+			if (pos) {
+				using namespace std;
+				auto title = Console::getInstance().getTitleW();
+				swap(title[--pos],title[pos]);
+				Console::getInstance().setTitleW(title);
+			}
 			break;
 		case VK_RIGHT:
-			cmd.right();
+			{
+				using namespace std;
+				auto title = Console::getInstance().getTitleW();
+				if (pos+1 >= title.size())break;
+				swap(title[++pos], title[pos]);
+				Console::getInstance().setTitleW(title);
+			}
 			break;
-		case VK_BACK:
-			cmd.backspace();
+		case VK_RETURN:
+			Console::getInstance().setTitleW(Console::getInstance().getTitleW().erase(pos));
+			return true;
 			break;
 		default:
-			cmd.insert(e.KeyEvent.uChar.AsciiChar);
+			if (e.KeyEvent.uChar.UnicodeChar) {
+				Console::getInstance().setTitleW(Console::getInstance().getTitleW().insert(pos, 1, e.KeyEvent.uChar.UnicodeChar));
+				++pos;
+			}
 			break;
 		}
 		return false;
 	}
 };
-class KeyEvent:public Event{
+class KeyEvent :public Event {
 private:
-	TextEditor &editor;
 public:
-	KeyEvent(decltype(editor) editor):editor(editor) {
-
-	}
-	bool excute(Event::eventT e)override {
+	bool excute(eventType e)override {
 		if (!e.KeyEvent.bKeyDown)return false;
-		if (e.KeyEvent.wVirtualKeyCode=='C' && (e.KeyEvent.dwControlKeyState == LEFT_CTRL_PRESSED || e.KeyEvent.dwControlKeyState == RIGHT_CTRL_PRESSED)&& OpenClipboard(nullptr)) {
-			EmptyClipboard();
-			const auto data = editor.getSelect();
-			auto copy = GlobalAlloc(GMEM_MOVEABLE,data.size());
-			if (!copy) {
-				CloseClipboard();
-				return false;
-			}
-			auto strCopy = GlobalLock(copy);
-			memcpy(strCopy,&data.front(),data.size());
-			GlobalUnlock(copy);
-			SetClipboardData(CF_TEXT,copy);
-			CloseClipboard();
+		const auto isControll = [&e](const decltype(e.KeyEvent.wVirtualKeyCode) key) {
+			return e.KeyEvent.wVirtualKeyCode == key
+				&&
+				(
+					e.KeyEvent.dwControlKeyState == LEFT_CTRL_PRESSED
+					||
+					e.KeyEvent.dwControlKeyState == RIGHT_CTRL_PRESSED
+				);
+		};
+		if (isControll('C')) {
+			Clipboard::getInstance().setString(ConsoleEditor::getInstance().getSelect());
 			return false;
 		}
-		else if (e.KeyEvent.wVirtualKeyCode == 'V' && (e.KeyEvent.dwControlKeyState == LEFT_CTRL_PRESSED || e.KeyEvent.dwControlKeyState == RIGHT_CTRL_PRESSED) && IsClipboardFormatAvailable (CF_TEXT) && OpenClipboard(nullptr)) {
-			if(editor.is_selecting())editor.deleteSelect();
-			Split split(static_cast<const char*>(GetClipboardData(CF_TEXT)),"\r\n");
-			CloseClipboard();
+		else if (isControll('V')) {
+			if (ConsoleEditor::getInstance().is_selecting())ConsoleEditor::getInstance().deleteSelect();
+			Split split(Clipboard::getInstance().getData(), "\n");
 			while (true) {
-				editor.insert(split.next());
+				ConsoleEditor::getInstance().insert(split.next());
 				if (split.empty())break;
-				editor.enter();
+				ConsoleEditor::getInstance().enter();
 			}
+			return false;
 		}
-
 		switch (e.KeyEvent.wVirtualKeyCode) {
 		case VK_ESCAPE:
-			return true;
-			break;
-		case VK_RETURN:
-			if (editor.is_selecting()) {
-				editor.deleteSelect();
-			}
-			editor.enter();
-			break;
-		case VK_UP:
-			if (editor.is_selecting()) {
-				const auto left = editor.selectRange().first;
-				editor.cancelSelect();
-				Console::getInstance().setCursorPos(left);
-			}
-			editor.up();
-			break;
-		case VK_DOWN:
-			if (editor.is_selecting()) {
-				const auto right = editor.selectRange().second;
-				editor.cancelSelect();
-				Console::getInstance().setCursorPos(right);
-			}
-			editor.down();
-			break;
-		case VK_LEFT:
-			if (editor.is_selecting()) {
-				const auto left = editor.selectRange().first;
-				editor.cancelSelect();
-				Console::getInstance().setCursorPos(left);
-				break;
-			}
-			editor.left();
-			break;
-		case VK_RIGHT:
-			if (editor.is_selecting()) {
-				const auto right = editor.selectRange().second;
-				editor.cancelSelect();
-				Console::getInstance().setCursorPos(right);
-				break;
-			}
-			editor.right();
-			break;
-		case VK_BACK:
-			if (editor.is_selecting()) {
-				editor.deleteSelect();
-				break;
-			}
-			editor.backspace();
-			break;
-		case VK_MENU:
 		{
-			Input input;
-			input.emplace<CommandModeKeyEvent>(KEY_EVENT);
-			input.input();
-			editor.run(std::move(Console::getInstance().getTitle()));
+			ConsoleInput input;
+			input.emplace<TitleKeyEvent>(KEY_EVENT);
+			input.loopW();
+			/*todo:excute command*/
+			if (Console::getInstance().getTitle() == "exit") {
+				return true;
+			}
 		}
 			break;
+		case VK_RETURN:
+			ConsoleEditor::getInstance().enter();
+			break;
+		case VK_UP:
+			ConsoleEditor::getInstance().up();
+			break;
+		case VK_DOWN:
+			ConsoleEditor::getInstance().down();
+			break;
+		case VK_LEFT:
+			ConsoleEditor::getInstance().left();
+			break;
+		case VK_RIGHT:
+			ConsoleEditor::getInstance().right();
+			break;
+		case VK_BACK:
+			if (ConsoleEditor::getInstance().is_selecting())ConsoleEditor::getInstance().deleteSelect();
+			else ConsoleEditor::getInstance().backspace();
+			break;
 		default:
-			if (!(e.KeyEvent.dwControlKeyState == SHIFT_PRESSED || !e.KeyEvent.dwControlKeyState))break;
-			if (editor.is_selecting()) {
-				editor.deleteSelect();
+			if (e.KeyEvent.uChar.AsciiChar) {
+				ConsoleEditor::getInstance().insert(e.KeyEvent.uChar.AsciiChar);
 			}
-			editor.insert(e.KeyEvent.uChar.AsciiChar);//selectされているときにeditorへの参照先を変えるとifで切り替えなくてもいい
+			break;
 		}
 		return false;
 	}
 };
-class MouseEvent:public Event{
+class MouseEvent :public Event {
 private:
-	enum class MOTION {
-		ANY,
-		LEFT,
-		RIGHT
-	};
-	TextEditor& editor;
-	COORD before;
-	MOTION motion;
 public:
-	MouseEvent(decltype(editor) editor):editor(editor){
-	
-	}
-	bool excute(Event::eventT e) {
+	bool excute(eventType e)override {
 		if (e.MouseEvent.dwButtonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
-			editor.move(e.MouseEvent.dwMousePosition);
+			ConsoleEditor::getInstance().move(e.MouseEvent.dwMousePosition);
+			if (e.MouseEvent.dwEventFlags != MOUSE_MOVED && ConsoleEditor::getInstance().is_selecting())ConsoleEditor::getInstance().cancelSelect();
 		}
 		if (e.MouseEvent.dwEventFlags == MOUSE_MOVED && e.MouseEvent.dwButtonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
-			if (editor.is_selecting()&& before.Y != Console::getInstance().getCursorPos().Y) {
-				auto changeColors=[this](auto start,auto end) mutable{
-					for (
-						decltype(start.X) x = start.X,
-						y = start.Y,
-						length = start.X + Console::getInstance().read(Console::getInstance().getScreenSize().X, start).find_last_of(editor.END_LINE);//editor.getend
-						y < end.Y;
-						++y,
-						x = 0,
-						length=Console::getInstance().read(Console::getInstance().getScreenSize().X, { x,y }).find_last_of(editor.END_LINE)
-						)
-					{
-						for (; x < length; ++x) {
-							Console::getInstance().setColor(~Console::getInstance().readColor(1, { x,y }).front(), 1, { x,y });
-						}
-					}
-					for (decltype(start.X) x = 0; x < end.X; ++x) {
-						Console::getInstance().setColor(~Console::getInstance().readColor(1, { x,end.Y }).front(), 1, { x,end.Y });
-					}
-				};
-				if (before.Y < Console::getInstance().getCursorPos().Y) {
-					changeColors(before,Console::getInstance().getCursorPos());
-				}
-				else {
-					changeColors(Console::getInstance().getCursorPos(),before);
-				}
-			}
-			else if (editor.is_selecting() &&(before.X != Console::getInstance().getCursorPos().X )) {
-				const auto changeColors = [this](auto start, auto end) {
-					for (auto x = start; x < end; ++x) {
-						Console::getInstance().setColor(~Console::getInstance().readColor(1, {x,before.Y}).front(), 1, {x,before.Y});
-					}
-				};
-				if (before.X < Console::getInstance().getCursorPos().X) {
-					changeColors(before.X, Console::getInstance().getCursorPos().X);
-				}
-				else {
-					changeColors(Console::getInstance().getCursorPos().X,before.X);
-				}
-			}
-			before = Console::getInstance().getCursorPos();
-			editor.select(Console::getInstance().getCursorPos());
+			ConsoleEditor::getInstance().select();
 		}
 		return false;
 	}
 };
 int main() {
-	TextEditor editor;
-	Input input;
-	input.emplace<KeyEvent>(KEY_EVENT,editor);
-	input.emplace<MouseEvent>(MOUSE_EVENT,editor);
-	input.input();
+	const auto mode = Console::getInstance().getMode();
+	Console::getInstance().setMode(ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);
+	Console::getInstance().setCodePage(CP_ACP);
+	ConsoleInput input;
+	input.emplace<KeyEvent>(KEY_EVENT);
+	input.emplace<MouseEvent>(MOUSE_EVENT);
+	ConsoleEditor::getInstance().reset();
+	input.loopA();
+	Console::getInstance().setMode(mode);
 	return EXIT_SUCCESS;
 }
