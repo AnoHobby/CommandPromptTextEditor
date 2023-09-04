@@ -25,6 +25,10 @@ public:\
 		return instance;\
 	}\
 private:
+
+bool operator<(const COORD&a,const COORD &b) {
+	return a.Y < b.Y || (b.Y == a.Y && a.X < b.X);
+}
 template <std::ranges::range T>
 auto adjacent_split(const T range) {
 	std::vector<std::pair<std::ranges::range_value_t<T>, std::size_t> > data;
@@ -354,8 +358,8 @@ public:
 		range.Right = screen.X;
 		range.Top = range.Bottom = cursor.Y;
 		cursor.X += str.size();
-		if (Console::getInstance().read(screen.X, { 0,cursor.Y }).find_last_of(END_LINE) <= str.size()) {
-			screen.X += str.size();
+		if (Console::getInstance().read(screen.X, { 0,cursor.Y }).find_last_of(END_LINE) <=cursor.X) {
+			screen.X = cursor.X;
 			Console::getInstance().setScrollSize(screen);
 		}
 		Console::getInstance().scroll(range, cursor);
@@ -374,6 +378,9 @@ public:
 		}
 		Console::getInstance().scroll(range, cursor);
 		putchar(c);
+	}
+	const auto& getSelectBefore() {
+		return before;
 	}
 	auto &reverseColor(COORD start,COORD end) {
 		if (end.Y < start.Y || (start.Y == end.Y && end.X < start.X))std::swap(start,end);
@@ -399,6 +406,9 @@ public:
 		before = Console::getInstance().getCursorPos();
 		if (!is_selecting())base = before;
 		return *this;
+	}
+	const auto& getSelectStart()const {
+		return base;
 	}
 	auto& cancelSelect() {
 		reverseColor(base,before);
@@ -432,7 +442,10 @@ public:
 	}
 	auto getSelect() {
 		auto start = base, end = before;
-		if (end.Y < start.Y || (start.Y == end.Y && end.X < start.X))std::swap(start, end);
+		if (end<start/*end.Y < start.Y || (start.Y == end.Y && end.X < start.X)*/) {
+			using namespace std;
+			swap(start, end);
+		}
 		std::string text;
 		const auto reverse = [&start,&text](const auto size) {
 			text+=std::move(Console::getInstance().read(size - start.X, start));
@@ -595,7 +608,42 @@ public:
 			ConsoleEditor::getInstance().write(std::move(Clipboard::getInstance().getData()));
 			return false;
 		}
+		const auto pressing_shift = e.KeyEvent.dwControlKeyState & SHIFT_PRESSED;
+		if (pressing_shift && VK_LEFT <= e.KeyEvent.wVirtualKeyCode && e.KeyEvent.wVirtualKeyCode <= VK_DOWN) {
+			ConsoleEditor::getInstance().select();
+		}
 		switch (e.KeyEvent.wVirtualKeyCode) {
+		case VK_UP:
+			if ((!pressing_shift && ConsoleEditor::getInstance().is_selecting())&& ConsoleEditor::getInstance().getSelectStart() < Console::getInstance().getCursorPos()) {
+				Console::getInstance().setCursorPos(ConsoleEditor::getInstance().getSelectStart());
+			}
+
+			ConsoleEditor::getInstance().up();
+			break;
+		case VK_DOWN:
+			if ((!pressing_shift && ConsoleEditor::getInstance().is_selecting()) && Console::getInstance().getCursorPos() < ConsoleEditor::getInstance().getSelectStart() ) {
+				Console::getInstance().setCursorPos(ConsoleEditor::getInstance().getSelectStart());
+			}
+			ConsoleEditor::getInstance().down();
+			break;
+		case VK_LEFT:
+			if (!pressing_shift && ConsoleEditor::getInstance().is_selecting()) {
+				if (ConsoleEditor::getInstance().getSelectStart() < Console::getInstance().getCursorPos()) {
+					Console::getInstance().setCursorPos(ConsoleEditor::getInstance().getSelectStart());
+				}
+				break;
+			}
+			ConsoleEditor::getInstance().left();
+			break;
+		case VK_RIGHT:
+			if (!pressing_shift && ConsoleEditor::getInstance().is_selecting()) {
+				if (Console::getInstance().getCursorPos() < ConsoleEditor::getInstance().getSelectStart() ) {
+					Console::getInstance().setCursorPos(ConsoleEditor::getInstance().getSelectStart());
+				}
+				break;
+			}
+			ConsoleEditor::getInstance().right();
+			break;
 		case VK_ESCAPE:
 		{
 			ConsoleInput input;
@@ -603,31 +651,24 @@ public:
 			input.loopW();
 			return cmd.excute(Console::getInstance().getTitle());
 		}
-			break;
+		return false;
 		case VK_RETURN:
 			ConsoleEditor::getInstance().enter();
-			break;
-		case VK_UP:
-			ConsoleEditor::getInstance().up();
-			break;
-		case VK_DOWN:
-			ConsoleEditor::getInstance().down();
-			break;
-		case VK_LEFT:
-			ConsoleEditor::getInstance().left();
-			break;
-		case VK_RIGHT:
-			ConsoleEditor::getInstance().right();
-			break;
+			return false;
 		case VK_BACK:
 			if (ConsoleEditor::getInstance().is_selecting())ConsoleEditor::getInstance().deleteSelect();
 			else ConsoleEditor::getInstance().backspace();
-			break;
+			return false;
 		default:
 			if (e.KeyEvent.uChar.AsciiChar) {
+				if (ConsoleEditor::getInstance().is_selecting())ConsoleEditor::getInstance().deleteSelect();
 				ConsoleEditor::getInstance().insert(e.KeyEvent.uChar.AsciiChar);
 			}
-			break;
+			return false;
+		}
+		if (pressing_shift)ConsoleEditor::getInstance().select();
+		else if (ConsoleEditor::getInstance().is_selecting()) {
+			ConsoleEditor::getInstance().cancelSelect();
 		}
 		return false;
 	}
@@ -642,6 +683,7 @@ public:
 		}
 		if (e.MouseEvent.dwEventFlags == MOUSE_MOVED && e.MouseEvent.dwButtonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
 			ConsoleEditor::getInstance().select();
+			//idea:other input class
 		}
 		return false;
 	}
