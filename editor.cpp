@@ -359,7 +359,7 @@ public:
 		range.Top = range.Bottom = cursor.Y;
 		cursor.X += str.size();
 		if (Console::getInstance().read(screen.X, { 0,cursor.Y }).find_last_of(END_LINE) <=cursor.X) {
-			screen.X = cursor.X;
+			screen.X = cursor.X+1;
 			Console::getInstance().setScrollSize(screen);
 		}
 		Console::getInstance().scroll(range, cursor);
