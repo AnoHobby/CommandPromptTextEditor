@@ -236,9 +236,11 @@ public:
 	}
 	auto &reset() {
 		auto screen = Console::getInstance().getScreenSize();
-		Console::getInstance().scroll({ 0,0,screen.X,screen.Y }, { 0,static_cast<decltype(screen.Y)>(-screen.Y) });
+		Console::getInstance()
+			.scroll({ 0,0,screen.X,screen.Y }, { 0,static_cast<decltype(screen.Y)>(-screen.Y) })
+			.setCursorPos({ 0,0 });
 		putchar(END_LINE);
-		Console::getInstance().setCursorPos({ 0,0 });
+		Console::getInstance().setCursorPos({0,0});
 		return *this;
 	}
 	auto enter() {
@@ -583,7 +585,7 @@ public:
 			if (data.empty())return false;
 			ConsoleEditor::getInstance()
 				.reset()
-				.write(File(data.get()).read());
+				.write(std::move(File(data.get()).read()));
 			return false;
 			});
 		cmd.emplace("exit", [](Split& data) {
@@ -703,3 +705,6 @@ int main() {
 	Console::getInstance().setMode(mode);
 	return EXIT_SUCCESS;
 }
+/*
+TODO:Enable Tab Key
+*/
