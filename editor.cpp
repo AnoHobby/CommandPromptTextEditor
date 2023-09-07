@@ -358,8 +358,10 @@ public:
 		range.Right = screen.X;
 		range.Top = range.Bottom = cursor.Y;
 		cursor.X += str.size();
-		if (Console::getInstance().read(screen.X, { 0,cursor.Y }).find_last_of(END_LINE) <=cursor.X) {
-			screen.X = cursor.X+1;
+		const auto inserted_end_line=Console::getInstance().read(screen.X, { 0,cursor.Y }).find_last_of(END_LINE) + str.size();
+		if ( inserted_end_line>screen.X) {
+			screen.X = inserted_end_line+1;// the end line will be on the left
+			//screen.X+=str.size();//the endline will be on the right
 			Console::getInstance().setScrollSize(screen);
 		}
 		Console::getInstance().scroll(range, cursor);
@@ -653,6 +655,7 @@ public:
 		}
 		return false;
 		case VK_RETURN:
+			if (ConsoleEditor::getInstance().is_selecting())ConsoleEditor::getInstance().deleteSelect();
 			ConsoleEditor::getInstance().enter();
 			return false;
 		case VK_BACK:
@@ -683,7 +686,6 @@ public:
 		}
 		if (e.MouseEvent.dwEventFlags == MOUSE_MOVED && e.MouseEvent.dwButtonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
 			ConsoleEditor::getInstance().select();
-			//idea:other input class
 		}
 		return false;
 	}
