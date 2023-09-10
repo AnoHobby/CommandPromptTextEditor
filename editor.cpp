@@ -359,7 +359,7 @@ public:
 
 	}
 	auto insert(std::string str) {
-		replace(str,"\t",TAB);//ˆê“xo—Í‚µ‚Äcursor‚ÌˆÚ“®—Ê‚Å•¶š—ñ‚ğ•\¦‚·‚é‚Ì‚É•K—v‚È’·‚³‚ğæ“¾‚µ‚½‚ç‚±‚ê‚Í•K—v‚È‚¢
+		replace(str,"\t",TAB);//ä¸€åº¦å‡ºåŠ›ã—ã¦cursorã®ç§»å‹•é‡ã§æ–‡å­—åˆ—ã‚’è¡¨ç¤ºã™ã‚‹ã®ã«å¿…è¦ãªé•·ã•ã‚’å–å¾—ã—ãŸã‚‰ã“ã‚Œã¯å¿…è¦ãªã„
 		auto cursor = Console::getInstance().getCursorPos();
 		auto screen = Console::getInstance().getScreenSize();
 		SMALL_RECT range;
@@ -688,7 +688,6 @@ public:
 		return false;
 	}
 };
-#include <bitset>
 class MouseEvent :public Event {
 private:
 public:
