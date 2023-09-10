@@ -688,6 +688,7 @@ public:
 		return false;
 	}
 };
+#include <bitset>
 class MouseEvent :public Event {
 private:
 public:
@@ -698,6 +699,14 @@ public:
 		}
 		if (e.MouseEvent.dwEventFlags == MOUSE_MOVED && e.MouseEvent.dwButtonState == FROM_LEFT_1ST_BUTTON_PRESSED) {
 			ConsoleEditor::getInstance().select();
+		}
+		switch (e.MouseEvent.dwEventFlags) {
+		case MOUSE_WHEELED:
+			SendMessage(GetConsoleWindow(), WM_VSCROLL, e.MouseEvent.dwButtonState & 0x80000000 ? SB_LINEDOWN : SB_LINEUP, 0);
+			break;
+		case MOUSE_HWHEELED:
+			SendMessage(GetConsoleWindow(), WM_HSCROLL, e.MouseEvent.dwButtonState & 0x80000000 ? SB_LINEUP : SB_LINEDOWN , 0);
+			break;
 		}
 		return false;
 	}
