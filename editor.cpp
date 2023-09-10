@@ -20,7 +20,7 @@ name(const name&&) = delete;\
 name& operator=(const name&) = delete;\
 name& operator=(const name&&) = delete;\
 public:\
-	static auto& getInstance() {\
+    static auto& getInstance() {\
 		static name instance;\
 		return instance;\
 	}\
@@ -42,6 +42,11 @@ auto adjacent_split(const T range) {
 		data.emplace_back(i,1);
 	}
 	return std::move(data);
+}
+inline auto replace(std::string &str,const std::string &&before,const std::string &&after) {
+	for (auto pos = str.find(before); pos != std::string::npos; pos = str.find(before,pos)){
+		str.replace(pos,before.size(),after);
+	}
 }
 class Split {
 private:
@@ -203,6 +208,7 @@ public:
 class ConsoleEditor {
 private:
 	Singleton(ConsoleEditor);
+	static constexpr auto TAB = "    ";
 	COORD base={-1}, before;
 public:
 	
@@ -353,6 +359,7 @@ public:
 
 	}
 	auto insert(std::string str) {
+		replace(str,"\t",TAB);//一度出力してcursorの移動量で文字列を表示するのに必要な長さを取得したらこれは必要ない
 		auto cursor = Console::getInstance().getCursorPos();
 		auto screen = Console::getInstance().getScreenSize();
 		SMALL_RECT range;
@@ -362,8 +369,7 @@ public:
 		cursor.X += str.size();
 		const auto inserted_end_line=Console::getInstance().read(screen.X, { 0,cursor.Y }).find_last_of(END_LINE) + str.size();
 		if ( inserted_end_line>screen.X) {
-			screen.X = inserted_end_line+1;// the end line will be on the left
-			//screen.X+=str.size();//the endline will be on the right
+			screen.X = inserted_end_line+1;
 			Console::getInstance().setScrollSize(screen);
 		}
 		Console::getInstance().scroll(range, cursor);
@@ -578,6 +584,7 @@ public:
 		cmd.emplace("save", [](Split& data) {
 			if (data.empty())return false;
 			File file(data.get());
+
 			file.write(ConsoleEditor::getInstance().readAll());
 			return false;
 			});
@@ -664,6 +671,9 @@ public:
 			if (ConsoleEditor::getInstance().is_selecting())ConsoleEditor::getInstance().deleteSelect();
 			else ConsoleEditor::getInstance().backspace();
 			return false;
+		case VK_TAB:
+		ConsoleEditor::getInstance().insert("\t");
+		return false;
 		default:
 			if (e.KeyEvent.uChar.AsciiChar) {
 				if (ConsoleEditor::getInstance().is_selecting())ConsoleEditor::getInstance().deleteSelect();
@@ -705,6 +715,3 @@ int main() {
 	Console::getInstance().setMode(mode);
 	return EXIT_SUCCESS;
 }
-/*
-TODO:Enable Tab Key
-*/
