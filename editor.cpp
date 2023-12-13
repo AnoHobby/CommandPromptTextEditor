@@ -30,9 +30,6 @@ private:
 bool operator<(const COORD& a, const COORD& b) {
 	return a.Y < b.Y || (b.Y == a.Y && a.X < b.X);
 }
-//bool operator!=(const COORD& a, const COORD& b) {
-//	return a.X != b.X || a.Y != b.Y;
-//}
 template <std::ranges::range T>
 auto adjacent_split(const T range) {
 	std::vector<std::pair<std::ranges::range_value_t<T>, std::size_t> > data;
@@ -207,7 +204,7 @@ namespace Console {
 	}
 	namespace Editor {
 		static constexpr auto TAB = "    ";
-		static constexpr auto END_LINE = '|';
+		static constexpr auto END_LINE = 0x7f;
 		static constexpr auto NOT_FOUND_END_LINE = -1;
 		inline auto getEndLine(COORD pos) {
 			for (pos.X = Console::getScreenSize().X; 0 <= pos.X && Console::read(1, pos).front() != END_LINE; --pos.X) {}
@@ -882,7 +879,6 @@ bool KeyEvent::excute(eventType e) {
 }
 
 int main() {
-	std::cout << Console::Editor::getEndLine({ 10,10 });
 	const auto mode = Console::getMode();
 	Console::setMode(ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);
 	Console::setCodePage(CP_ACP);
