@@ -30,9 +30,9 @@ private:
 bool operator<(const COORD& a, const COORD& b) {
 	return a.Y < b.Y || (b.Y == a.Y && a.X < b.X);
 }
-bool operator!=(const COORD& a, const COORD& b) {
-	return a.X != b.X || a.Y != b.Y;
-}
+//bool operator!=(const COORD& a, const COORD& b) {
+//	return a.X != b.X || a.Y != b.Y;
+//}
 template <std::ranges::range T>
 auto adjacent_split(const T range) {
 	std::vector<std::pair<std::ranges::range_value_t<T>, std::size_t> > data;
@@ -56,7 +56,8 @@ class Clipboard {
 private:
 	Singleton(Clipboard);
 public:
-	auto setString(const std::string text) {
+	auto setString(std::string text) {
+		text.resize(text.size() + 1);
 		if (!OpenClipboard(nullptr))return false;
 		EmptyClipboard();
 		const auto copy = GlobalAlloc(GMEM_MOVEABLE, text.size());
@@ -207,32 +208,32 @@ namespace Console {
 	namespace Editor {
 		static constexpr auto TAB = "    ";
 		static constexpr auto END_LINE = '|';
+		static constexpr auto NOT_FOUND_END_LINE = -1;
+		inline auto getEndLine(COORD pos) {
+			for (pos.X = Console::getScreenSize().X; 0 <= pos.X && Console::read(1, pos).front() != END_LINE; --pos.X) {}
+			return pos.X;
+		}
 		inline auto readAll() {
 			std::string text;
 			for (short y = 0;; ++y) {
-				const auto line = Console::read(Console::getScreenSize().X, { 0,y });
-				const auto endLine = line.find_last_of(END_LINE);
-				if (endLine == std::string::npos)return text.substr(0, text.size() - 1/*\n size*/);
-				text.append(line.substr(0, endLine) + "\n");
+				const auto endPos = getEndLine({ 0,y });
+				if (endPos == NOT_FOUND_END_LINE)return text.substr(0, text.size() - 1/*\n size*/);
+				text.append(Console::read(endPos, { 0,y }) + "\n");
 			}
 		}
-		auto read(COORD& start, COORD& end) {
-			std::string text = std::move(Console::read(Console::getScreenSize().X, start));
-			const auto found = text.find_last_of(END_LINE);
-			if (start.Y == end.Y && end.X - start.X < found) {
-				return std::move(text.erase(end.X - start.X, text.size() - end.X + start.X));
+		inline auto read(COORD start, COORD end) {
+			std::string text;
+			const auto reverse = [&start, &text](const auto size) {
+				text += std::move(Console::read(size - start.X, start));
+			};
+			for (; start.Y < end.Y; ++start.Y) {
+				reverse(Console::Editor::getEndLine(start) + 1);
+				text.back() = '\n';
+				start.X = 0;
 			}
-			text.erase(found, text.size() - found).push_back('\n');
-			++start.Y;
-			start.X = 0;
-			for (; start.Y < end.Y; ++start.Y)
-			{
-				auto line = Console::read(Console::getScreenSize().X, start);
-				const auto found = line.find_last_of(END_LINE);
-				line.erase(found, line.size() - found).push_back('\n');
-				text.append(std::move(line));
-			}
-			return std::move(text.append(std::move(Console::read(end.X, { 0,end.Y }))));
+			start.Y = end.Y;
+			reverse(end.X);
+			return std::move(text);
 		}
 		auto reset() {
 			auto screen = Console::getScreenSize();
@@ -263,10 +264,7 @@ namespace Console {
 				Console::setScrollSize(screen);
 			}
 		}
-		inline auto getEndLine(COORD pos) {
-			for (pos.X = Console::getScreenSize().X; 0 <= pos.X && Console::read(1, pos).front() != END_LINE; --pos.X) {}
-			return pos.X;
-		}
+
 
 		inline auto move(COORD pos) {
 			const auto endLine = getEndLine(pos);
@@ -335,9 +333,12 @@ namespace Console {
 			range.Right = screen.X;
 			range.Bottom = cursor.Y;
 			--cursor.Y;
-			auto content = Console::read(screen.X, cursor);
-			content = content.substr(0, content.find_last_of(END_LINE));
-			cursor.X = content.size();
+			cursor.X = Console::Editor::getEndLine(cursor);
+			const auto endLine = cursor.X + Console::Editor::getEndLine({ 0,range.Top });
+			if (screen.X <= endLine) {
+				screen.X = endLine + 1;
+				Console::setScrollSize(screen);
+			}
 			Console::setCursorPos(cursor);
 			Console::scroll(range, cursor);
 			++range.Top;
@@ -351,12 +352,12 @@ namespace Console {
 			auto screen = Console::getScreenSize();
 			SMALL_RECT range;
 			range.Left = cursor.X;
-			range.Right = screen.X;
+			range.Right = screen.X;//ñ≥ë Ç»ïîï™Ç™Ç†ÇÈ
 			range.Top = range.Bottom = cursor.Y;
 			cursor.X += str.size();
-			const auto inserted_end_line = Console::read(screen.X, { 0,cursor.Y }).find_last_of(END_LINE) + str.size();
-			if (inserted_end_line > screen.X) {
-				screen.X = inserted_end_line + 1;
+			const auto inserted_end_line = Console::Editor::getEndLine(cursor) + str.size();
+			if (inserted_end_line >= screen.X) {
+				screen.X = inserted_end_line + 1;;
 				Console::setScrollSize(screen);
 			}
 			Console::scroll(range, cursor);
@@ -409,10 +410,6 @@ namespace Console {
 		auto is_selecting()const {
 			return base.X != NOT_SELECTED;
 		}
-		/*auto& reverseColor() {
-			if (is_selecting() && (before.X != Console::getCursorPos().X || before.Y != Console::getCursorPos().Y))Console::Editor::reverseColor(before, Console::getCursorPos());
-			return *this;
-		}*/
 		auto& select(decltype(base) start, decltype(before) end) {
 			base = start;
 			before = end;
@@ -457,23 +454,10 @@ namespace Console {
 
 		}
 		auto getSelection() {
-			auto start = base, end = before;
-			if (end < start) {
-				using namespace std;
-				swap(start, end);
+			if (before < base) {
+				return std::move(Console::Editor::read(before, base));
 			}
-			std::string text;
-			const auto reverse = [&start, &text](const auto size) {
-				text += std::move(Console::read(size - start.X, start));
-				text.back() = '\n';
-			};
-			for (; start.Y < end.Y; ++start.Y) {
-				reverse(Console::Editor::getEndLine(start) + 1);
-				start.X = 0;
-			}
-			start.Y = end.Y;
-			reverse(end.X);
-			return std::move(text);
+			return std::move(Console::Editor::read(base, before));
 		}
 	};
 };
@@ -618,37 +602,46 @@ private:
 		Console::setCursorPos(pos);
 		Console::Select::getInstance().select(pos, { pos.X + offset.X,pos.Y + offset.Y });
 	}
+	auto addOffset(COORD pos)const{
+		if (offset.Y) {
+			pos.X = offset.X;
+			pos.Y += offset.Y;
+		}
+		else {
+			pos.X += offset.X;
+		}
+		return pos;
+	}
 public:
 	~FindEvent() {
 		if (Console::getTitle() == NOT_FOUND_MESSAGE) return;
 		COORD pos{ 0,0 };
 		for (
-			auto endLine = Console::read(Console::getScreenSize().X, pos).find_last_of(Console::Editor::END_LINE);
-			std::string::npos != endLine;
-			endLine = Console::read(Console::getScreenSize().X - pos.X, pos).find_last_of(Console::Editor::END_LINE)
+			auto endLine = Console::Editor::getEndLine(pos);
+			Console::Editor::NOT_FOUND_END_LINE != endLine;
+			endLine = Console::Editor::getEndLine(pos)
 			) {
 			if ([&] {
-				for (const auto endPos = endLine + pos.X; pos.X < endPos; ) {
+				for (; pos.X < endLine; ) {
 					if (Console::readColor(1, pos).front() == Console::getDefaultColor()) {
 						++pos.X;
 							continue;
 					}
-					Console::Editor::reverseColor(pos, offset.Y ? COORD{offset.X, static_cast<short>(pos.Y + offset.Y)} : COORD{ static_cast<short>(pos.X + offset.X),pos.Y });
-					if (offset.Y) {
-						pos.X = offset.X;
-							pos.Y += offset.Y;
-						return true;
-					}
+					if(!(pos.Y==Console::getCursorPos().Y&&pos.X==Console::getCursorPos().X&&Console::Select::getInstance().is_selecting()))Console::Editor::reverseColor(pos, offset.Y ? COORD{offset.X, static_cast<short>(pos.Y + offset.Y)} : COORD{ static_cast<short>(pos.X + offset.X),pos.Y });
+						if (offset.Y) {
+							pos.X = offset.X;
+								pos.Y += offset.Y;
+								return true;
+						}
 					pos.X += offset.X;
 				}
 				return false;
-				}())continue;//pos.Y+=lambda
+				}())continue;
 			pos.X = 0;
 			++pos.Y;
 		}
 	}
 	FindEvent(std::string&& findText) :offset{ static_cast<short>(findText.size()),0 } {
-		//ttodo:ï™ÇØÇƒì«Ç›çûÇ›
 		for (auto pos = findText.find('\\'); std::string::npos != pos; pos = findText.find('\\', pos + 1)) {
 			if (*(findText.cbegin() + pos + 1) == '\\') {
 				findText.erase(findText.cbegin() + pos);
@@ -661,44 +654,35 @@ public:
 				if (backOffset == LINE)backOffset = pos;
 			}
 		}
-		const auto data = Console::Editor::readAll();
-		constexpr auto SETTED = -1, NOT_FOUND = SETTED - 1;
-		COORD first = { NOT_FOUND };
-		short line = 0, lastPos = 0;
-		for (auto pos = data.find(findText); std::string::npos != pos; pos = data.find(findText, findText.size() + pos)) {
-			for (auto newLine = std::string_view(data.begin() + lastPos, data.begin() + pos).find('\n'); newLine != std::string::npos; newLine = std::string_view(data.begin() + lastPos, data.begin() + pos).find('\n')) {
-				++line;
-				++lastPos += newLine;
+		COORD pos{ 0,0 };
+		for (auto endLine = Console::Editor::getEndLine(pos); Console::Editor::NOT_FOUND_END_LINE != endLine; endLine = Console::Editor::getEndLine(pos)) {
+			for (; pos.X < endLine;) {
+				if (Console::read(1, pos).front() != findText.front()) {
+					++pos.X;
+					continue;
+				}
+				const auto end = addOffset(pos);
+				if (Console::Editor::read(pos, end) == findText) {
+					Console::Editor::reverseColor(pos, end);
+					if (Console::readColor(1, Console::getCursorPos()).front() == Console::getDefaultColor()) {
+						move(pos);
+					}
+					if (offset.Y)break;
+					pos.X += offset.X;
+				}
+				else {
+					++pos.X;
+				}
 			}
-			COORD start{ static_cast<short>(pos - lastPos),line }, end = start;
-			if (offset.Y)end.X = offset.X;//offset.Y*end.X+offsetX
-			else end.X += offset.X;
-			end.Y += offset.Y;
-			Console::Editor::reverseColor(start, end);
-			if (
-				first.X != SETTED
-				&&
-				(
-					Console::getCursorPos().Y < start.Y
-					||
-					(
-						Console::getCursorPos().Y == start.Y
-						&&
-						Console::getCursorPos().X < start.X
-						)
-					)
-				) {
-				move(start);
-				first.X = SETTED;
+			if (offset.Y) {
+				pos.Y += offset.Y;
+				continue;
 			}
-			if (first.X != NOT_FOUND)continue;
-			first = start;
+			pos.X = 0;
+			++pos.Y;
 		}
-		//if (0> first.X)return;
-		if (0 <= first.X)move(first);
-		else if (first.X == NOT_FOUND) {
+		if (Console::readColor(1, Console::getCursorPos()).front() == Console::getDefaultColor()) {
 			Console::setTitle(NOT_FOUND_MESSAGE);
-			return;
 		}
 	}
 	bool excute(eventType e) override {
@@ -710,6 +694,20 @@ public:
 		switch (e.KeyEvent.wVirtualKeyCode) {
 		case VK_SHIFT:
 			break;
+		case VK_RIGHT:
+			if (offset.Y) {
+				Console::setCursorPos({ offset.X,static_cast<short>(offset.Y + Console::getCursorPos().Y) });
+			}
+			else {
+				auto pos = Console::getCursorPos();
+				pos.X += offset.X - 1;
+				Console::setCursorPos(pos);
+			}
+		case VK_LEFT:
+		case VK_ESCAPE:
+			Console::Select::getInstance().cancel();
+			return true;
+			break;
 		case VK_UP:
 		{
 			auto pos = Console::getCursorPos();
@@ -719,15 +717,15 @@ public:
 				if (next == colors.rend()) {
 					pos.X = 0;
 					if (!pos.Y) {
-						for (; std::string::npos != Console::read(Console::getScreenSize().X, pos).find_last_of(Console::Editor::END_LINE); ++pos.Y);
+						for (; Console::Editor::NOT_FOUND_END_LINE != Console::Editor::getEndLine(pos); ++pos.Y);
 					}
 					--pos.Y;
-					pos.X = Console::read(Console::getScreenSize().X, pos).find_last_of(Console::Editor::END_LINE);
+					pos.X = Console::Editor::getEndLine(pos);
 					continue;
 				}
 				else if (offset.Y) {
 					pos.Y -= offset.Y;
-					pos.X = Console::read(Console::getScreenSize().X, { 0,pos.Y }).find_last_of(Console::Editor::END_LINE) - backOffset;
+					pos.X = Console::Editor::getEndLine(pos) - backOffset;
 				}
 				else pos.X -= offset.X;
 				move(pos);
@@ -738,19 +736,14 @@ public:
 		case VK_DOWN:
 		case VK_RETURN:
 		{
-			auto pos = Console::getCursorPos();
-			if (offset.Y) {
-				pos.X = offset.X;
-				pos.Y += offset.Y;
-			}
-			else pos.X += offset.X;
+			auto pos = addOffset(Console::getCursorPos());
 			while (1) {
-				const auto endLine = Console::read(Console::getScreenSize().X - pos.X, pos).find_last_of(Console::Editor::END_LINE);
-				if (std::string::npos == endLine) {
+				const auto endLine = Console::Editor::getEndLine(pos);
+				if (Console::Editor::NOT_FOUND_END_LINE == endLine) {
 					pos.Y = pos.X = 0;
 					continue;
 				}
-				const auto colors = Console::readColor(endLine, pos);
+				const auto colors = Console::readColor(endLine - pos.X, pos);
 				const auto next = std::ranges::find(colors, Console::readColor(1, Console::getCursorPos()).front());
 				if (next == colors.end()) {
 					pos.X = 0;
@@ -857,7 +850,7 @@ bool KeyEvent::excute(eventType e) {
 			file.write(Console::Editor::readAll());
 		}
 		else if (command == "open") {
-			Console::Editor::reset();
+			Console::Editor::reset();//todo:ï™äÑì«Ç›çûÇ›
 			Console::Editor::write(std::move(File(text.substr(5)).read()));
 			Console::setCursorPos({ 0,0 });
 		}
@@ -889,6 +882,7 @@ bool KeyEvent::excute(eventType e) {
 }
 
 int main() {
+	std::cout << Console::Editor::getEndLine({ 10,10 });
 	const auto mode = Console::getMode();
 	Console::setMode(ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);
 	Console::setCodePage(CP_ACP);
