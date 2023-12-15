@@ -105,11 +105,18 @@ public:
 	File(decltype(name) name) :name(name) {
 
 	}
-	std::string read() {
+	//std::string read() {
+	//	std::fstream file(name.c_str());
+	//	if (!file)return "";
+	//	return std::move(std::string(std::istreambuf_iterator<decltype(name)::value_type >(file), std::istreambuf_iterator<decltype(name)::value_type>()));
+	//}
+	template <class F>
+	auto read(F &&lambda) {
 		std::fstream file(name.c_str());
-		if (!file)return "";
-		return std::move(std::string(std::istreambuf_iterator<decltype(name)::value_type >(file), std::istreambuf_iterator<decltype(name)::value_type>()));
+		if (!file)return;
+		std::for_each(std::istreambuf_iterator<decltype(name)::value_type >(file), std::istreambuf_iterator<decltype(name)::value_type>(),lambda);
 	}
+
 	auto write(decltype(name) str) {
 		std::ofstream file(name.c_str());
 		if (!file)return false;
@@ -118,10 +125,11 @@ public:
 	}
 };
 namespace Console {
+	constexpr auto FILLER_CHARACTER = ' ';
 	inline auto scroll(SMALL_RECT range, const COORD pos)noexcept(ScrollConsoleScreenBuffer) {
 		CHAR_INFO info;
 		info.Attributes = 0;
-		info.Char.AsciiChar = ' ';
+		info.Char.AsciiChar =FILLER_CHARACTER;
 		ScrollConsoleScreenBuffer(GetStdHandle(STD_OUTPUT_HANDLE), &range, nullptr, pos, &info);
 	}
 	inline auto read(const std::size_t size, const COORD pos) {
@@ -155,6 +163,22 @@ namespace Console {
 		GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info);
 		return info.dwSize;
 	}
+	inline auto getWindow() {
+		CONSOLE_SCREEN_BUFFER_INFO info;
+		GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info);
+		return info.srWindow;
+	}
+	inline auto getWindowSize() {
+		auto info = getWindow();
+		info.Right -= info.Left;
+		info.Bottom -= info.Top;
+		return COORD{ info.Right,info.Bottom };
+	}
+	inline auto setScreenSize(const COORD size) {
+		const SMALL_RECT windowSize={0, 0, size.X, size.Y};
+		SetConsoleWindowInfo(GetStdHandle(STD_OUTPUT_HANDLE),1,&windowSize);
+	}
+
 	inline auto getDefaultColor() {
 		CONSOLE_SCREEN_BUFFER_INFO info;
 		GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info);
@@ -181,17 +205,17 @@ namespace Console {
 		title.shrink_to_fit();
 		return std::move(title);
 	}
-	inline auto setTitle(std::string title) {
+	inline auto setTitle(const std::string title) {
 		SetConsoleTitleA(title.c_str());
 	}
 
-	inline auto setTitleW(std::wstring title) {
+	inline auto setTitleW(const std::wstring title) {
 		SetConsoleTitleW(title.c_str());
 	}
-	inline auto setScrollSize(COORD size) {
+	inline auto setScrollSize(const COORD size) {
 		SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), size);
 	}
-	inline auto setColor(WORD color, DWORD length, COORD pos) {
+	inline auto setColor(const WORD color,DWORD length,const COORD pos) {
 		FillConsoleOutputAttribute(GetStdHandle(STD_OUTPUT_HANDLE), color, length, pos, &length);
 	}
 	inline auto getMode() {
@@ -238,6 +262,7 @@ namespace Console {
 			Console::setCursorPos({ 0,0 });
 			putchar(END_LINE);
 			Console::setCursorPos({ 0,0 });
+			Console::setScrollSize({ static_cast<short>(GetSystemMetrics(SM_CXMIN)),static_cast<short>(GetSystemMetrics(SM_CYMIN)) });
 		}
 		auto enter() {
 			auto cursor = Console::getCursorPos();
@@ -256,9 +281,13 @@ namespace Console {
 			Console::read(0, { 0,0 });
 			putchar(END_LINE);
 			Console::setCursorPos(cursor);
-			if (Console::read(screen.X, { 0,static_cast<decltype(screen.Y)>(screen.Y - 1) }).find(END_LINE) != std::string::npos) {
+			//if (Console::read(screen.X, { 0,static_cast<decltype(screen.Y)>(screen.Y - 1) }).find(END_LINE) != std::string::npos) {
+			if (Console::read(screen.X, { 0,short(screen.Y-1)}).find(END_LINE) != std::string::npos) {
 				++screen.Y;
 				Console::setScrollSize(screen);
+			}
+			if (cursor.Y==Console::getWindow().Bottom) {
+				SendMessage(GetConsoleWindow(), WM_VSCROLL, SB_LINEDOWN, 0);
 			}
 		}
 
@@ -358,11 +387,17 @@ namespace Console {
 				Console::setScrollSize(screen);
 			}
 			Console::scroll(range, cursor);
+			if (Console::getWindow().Right < cursor.X) {
+				SendMessage(GetConsoleWindow(), WM_HSCROLL, MAKEWPARAM(SB_THUMBPOSITION, cursor.X- Console::getWindowSize().X), 0);
+			}
 			std::cout << str;
 		}
 		auto insert(const char c) {
 			auto cursor = Console::getCursorPos();
 			auto screen = Console::getScreenSize();
+			if (Console::getWindow().Right<=cursor.X) {
+				SendMessage(GetConsoleWindow(), WM_HSCROLL, SB_LINEDOWN, 0);
+			}
 			SMALL_RECT range;
 			range.Left = cursor.X++;
 			range.Right = screen.X;
@@ -494,6 +529,22 @@ public:
 		LOOP_GENERATOR(W)
 #undef LOOP_GENERATOR
 };
+class ResizeEvent :public Event {
+private:
+	COORD size;
+public:
+	ResizeEvent() :size(Console::getScreenSize()) {
+	}
+	bool excute(eventType e)override {
+		if (e.WindowBufferSizeEvent.dwSize < size) {
+			Console::setScrollSize(size);
+		}
+		else {
+			size = e.WindowBufferSizeEvent.dwSize;
+		}
+		return false;
+	}
+};
 class ScrollEvent :public Event {
 private:
 public:
@@ -595,11 +646,7 @@ private:
 	static constexpr auto LINE = -1;
 	COORD offset;
 	short backOffset = LINE;
-	inline auto move(const COORD& pos) const {
-		Console::setCursorPos(pos);
-		Console::Select::getInstance().select(pos, { pos.X + offset.X,pos.Y + offset.Y });
-	}
-	auto addOffset(COORD pos)const{
+	auto addOffset(COORD pos)const {
 		if (offset.Y) {
 			pos.X = offset.X;
 			pos.Y += offset.Y;
@@ -608,6 +655,10 @@ private:
 			pos.X += offset.X;
 		}
 		return pos;
+	}
+	inline auto move(const COORD& pos) const {
+		Console::setCursorPos(pos);
+		Console::Select::getInstance().select(pos, addOffset(pos));
 	}
 public:
 	~FindEvent() {
@@ -786,9 +837,11 @@ bool KeyEvent::excute(eventType e) {
 	else if (isControll('F')) {
 		ConsoleInput inputText;
 		inputText.emplace<TitleKeyEvent>(KEY_EVENT);
+		inputText.emplace<ResizeEvent>(WINDOW_BUFFER_SIZE_EVENT);
 		inputText.loopW();
 		if (Console::getTitle().empty())return false;
 		ConsoleInput findMode;
+		findMode.emplace<ResizeEvent>(WINDOW_BUFFER_SIZE_EVENT);
 		findMode
 			.emplace<FindEvent>(KEY_EVENT, Console::getTitle())
 			.emplace<FindMouseEvent>(MOUSE_EVENT)
@@ -835,6 +888,7 @@ bool KeyEvent::excute(eventType e) {
 	{
 		ConsoleInput input;
 		input.emplace<TitleKeyEvent>(KEY_EVENT);
+		input.emplace<ResizeEvent>(WINDOW_BUFFER_SIZE_EVENT);
 		input.loopW();
 		const auto  text = Console::getTitle();
 		if (text == "exit")return true;
@@ -847,8 +901,11 @@ bool KeyEvent::excute(eventType e) {
 			file.write(Console::Editor::readAll());
 		}
 		else if (command == "open") {
-			Console::Editor::reset();//todo:分割読み込み
-			Console::Editor::write(std::move(File(text.substr(5)).read()));
+			Console::Editor::reset();
+			File(text.substr(5)).read([](const char &s) {
+				if (s == '\n')Console::Editor::enter();
+				else Console::Editor::insert(s);
+				});
 			Console::setCursorPos({ 0,0 });
 		}
 	}
@@ -882,11 +939,22 @@ int main() {
 	const auto mode = Console::getMode();
 	Console::setMode(ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);
 	Console::setCodePage(CP_ACP);
+	Console::Editor::reset();
 	ConsoleInput input;
 	input.emplace<KeyEvent>(KEY_EVENT);
 	input.emplace<MouseEvent>(MOUSE_EVENT);
-	Console::Editor::reset();
+	input.emplace<ResizeEvent>(WINDOW_BUFFER_SIZE_EVENT);
 	input.loopA();
 	Console::setMode(mode);
 	return EXIT_SUCCESS;
 }
+//todo:分割読み込み
+//todo:最大値よりも小さくなった場合,スクロールバーを短くする(処理が重くなるようなら却下)
+//idea:if(console.read(screen.size.x-1,pos.y)==endline){fitBuffersize}
+/*idea:
+	SendMessage(
+		GetConsoleWindow(),
+		WM_SYSCOMMAND,
+		GetMenuItemID(GetSystemMenu(GetConsoleWindow(), 0), GetMenuItemCount(GetSystemMenu(GetConsoleWindow(), 0)) - 1),
+		0);
+*/
