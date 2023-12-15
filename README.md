@@ -1,1 +1,1 @@
-# CommandTextEditor
+# CommandPromptTextEditor
