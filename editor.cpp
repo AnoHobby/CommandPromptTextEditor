@@ -2,6 +2,7 @@
 #include <iostream>
 #include <windows.h>
 #include <windowsx.h>
+#include <commctrl.h>
 #include <string>
 #include <algorithm>
 #include <vector>
@@ -273,6 +274,12 @@ namespace Console {
 			reverse(end.X);
 			return std::move(text);
 		}
+		inline auto expandScrollH(const short size) {
+			auto screen = Console::getBufferSize();
+			if (size < screen.X)return;
+			screen.X = size + 1;
+			Console::setScrollSize(screen);
+		}
 		inline auto fitScrollH(short y,short size) {
 			auto screen = Console::getBufferSize();
 			--screen.X;
@@ -282,7 +289,7 @@ namespace Console {
 			[&] {
 				for (; size < screen.X; --screen.X) {
 					for (y = getLineCount(); 0 <= y; --y) {
-						if (Console::FILLER_CHARACTER != Console::read(1, { screen.X,y }).front())return;
+						if (Console::Editor::END_LINE == Console::read(1, { screen.X,y }).front())return;
 					}
 				}
 			}();
@@ -395,10 +402,6 @@ namespace Console {
 				Console::scroll(range, { cursor.X -= is_multibyte,cursor.Y });
 				Console::setCursorPos(cursor);
 				fitScrollH(cursor.Y, 1 + is_multibyte);
-				//if (Console::read(1, { static_cast<short>(screen.X - is_multibyte - 2),cursor.Y }).front() != Console::Editor::END_LINE)return;
-				//SendMessage(GetConsoleWindow(), WM_HSCROLL, SB_LINEUP, 0);
-				//--screen.X;
-				//Console::setScrollSize(screen);
 				return;
 			}
 			if (!cursor.Y)return;
@@ -432,11 +435,7 @@ namespace Console {
 			range.Right = screen.X;
 			range.Top = range.Bottom = cursor.Y;
 			cursor.X += str.size();
-			const auto inserted_end_line = Console::Editor::getEndLine(cursor) + str.size();
-			if (inserted_end_line >= screen.X) {
-				screen.X = inserted_end_line + 1;
-				Console::setScrollSize(screen);
-			}
+			Console::Editor::expandScrollH(Console::Editor::getEndLine(cursor) + str.size());
 			Console::scroll(range, cursor);
 			if (Console::getScreen().Right < cursor.X) {
 				SendMessage(GetConsoleWindow(), WM_HSCROLL, MAKEWPARAM(SB_THUMBPOSITION, cursor.X - Console::getScreenSize().X), 0);
@@ -514,38 +513,61 @@ namespace Console {
 		}
 		auto remove() {
 			if (before.Y < base.Y || (base.Y == before.Y && before.X < base.X))std::swap(base, before);
-			auto screen = Console::getBufferSize();
-			short inserted_end_line;
 			const auto endLine = Console::Editor::getEndLine(base);
-			if (base.Y != before.Y&& (inserted_end_line= endLine+ Console::Editor::getEndLine(before) - before.X) >= screen.X) {
-				screen.X = inserted_end_line + 1;
-				Console::setScrollSize(screen);
-			}
+			const auto lineCount = Console::Editor::getLineCount();
+			if(before.Y!=base.Y)Console::Editor::expandScrollH(endLine + Console::Editor::getEndLine(before) - before.X);
+			const auto screen = Console::getBufferSize();
 			Console::setCursorPos(base);
 			Console::scroll(
 				{
 					before.X,
 					before.Y,
-					Console::getBufferSize().X,
+				    screen.X,
 					before.Y
 				},
 				base
 			);
-			if (base.Y == before.Y) {
-				Console::Editor::fitScrollH(base.Y,before.X-base.X);
-			}
-			else {
-				Console::Editor::fitScrollH(base.Y, endLine-base.X);
-			}
 			Console::scroll(
 				{
 					0,
-					++before.Y,
-					Console::getBufferSize().X,
-					Console::getBufferSize().Y
+					static_cast<short>(before.Y+1),
+					screen.X,
+					screen.Y
 				},
-				{ 0,++base.Y }
+				{ 0,static_cast<short>(1+base.Y)}
 			);
+			Console::Editor::fitScrollH(base.Y, (base.Y == before.Y ? before.X : endLine) - base.X);
+			if (screen.X - endLine < endLine - Console::Editor::getEndLine(base)) {
+				Console::scroll(
+					{
+						static_cast<short>(base.X+screen.X - endLine),
+						base.Y,
+						before.X,
+						base.Y
+					},
+					{0,-1}
+				);
+			}
+			if (screen.Y - (before.Y - base.Y)<=Console::getScreen().Bottom) {
+				SendMessage(
+					GetConsoleWindow(),
+					WM_VSCROLL,
+					MAKEWPARAM(SB_THUMBPOSITION, screen.Y - (before.Y - base.Y) - Console::getScreenSize().Y - 1)
+					, 0);
+			}
+			Console::setScrollSize({ Console::getBufferSize().X,static_cast<short>(screen.Y - (before.Y - base.Y)) });
+			
+			if (screen.Y - lineCount < lineCount - Console::Editor::getLineCount()) {
+				Console::scroll(
+					{
+						0,
+						static_cast<short>(Console::Editor::getLineCount()+screen.Y - lineCount),
+						Console::getBufferSize().X,
+						Console::getBufferSize().Y
+					},
+					Console::getBufferSize()
+				);
+			}
 			base.X = NOT_SELECTED;
 
 		}
@@ -1018,6 +1040,7 @@ int main() {
 		GetMenuItemID(GetSystemMenu(GetConsoleWindow(), 0), GetMenuItemCount(GetSystemMenu(GetConsoleWindow(), 0)) - 1),
 		0);
 	while (GetConsoleWindow() == GetForegroundWindow());
+	PropSheet_SetCurSel(GetForegroundWindow(),PropSheet_IndexToHwnd(GetForegroundWindow(), 2), 2);
 	while (Button_GetCheck(FindWindowEx(PropSheet_IndexToHwnd(GetForegroundWindow(), 2), FindWindowEx(PropSheet_IndexToHwnd(GetForegroundWindow(), 2), nullptr, TEXT("Button"), nullptr), TEXT("Button"), nullptr)) == BST_CHECKED) {
 		PostMessage(
 			FindWindowEx(PropSheet_IndexToHwnd(GetForegroundWindow(), 2), FindWindowEx(PropSheet_IndexToHwnd(GetForegroundWindow(), 2), nullptr, TEXT("Button"), nullptr), TEXT("Button"), nullptr)
@@ -1041,16 +1064,3 @@ int main() {
 	Console::setMode(mode);
 	return EXIT_SUCCESS;
 }
-
-/*idea
-	HKEY key;
-	DWORD value, size=sizeof(value);
-	RegGetValue(
-		HKEY_CURRENT_USER,
-		TEXT("Console"),
-		TEXT("LineWrap"),
-		RRF_RT_REG_DWORD,
-		nullptr,
-		&value,
-		&size);
-*/
