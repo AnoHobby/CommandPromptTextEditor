@@ -1,8 +1,9 @@
 #include <conio.h>
-#include <iostream>
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
+#include <Psapi.h>
+#include <iostream>
 #include <string>
 #include <algorithm>
 #include <vector>
@@ -50,6 +51,12 @@ inline auto replace(std::string& str, const std::string&& before, const std::str
 	for (auto pos = str.find(before); pos != std::string::npos; pos = str.find(before, pos)) {
 		str.replace(pos, before.size(), after);
 	}
+}
+inline auto&& replace(std::string&& str, const std::string&& before, const std::string&& after) {
+	for (auto pos = str.find(before); pos != std::string::npos; pos = str.find(before, pos)) {
+		str.replace(pos, before.size(), after);
+	}
+	return std::move(str);
 }
 class Clipboard {
 private:
@@ -124,6 +131,22 @@ public:
 		}
 	}
 };
+template <class T>
+class Handle {
+private:
+	const T handle;
+public:
+	Handle(T&& handle) :handle(handle) {
+
+	}
+	~Handle() {
+		CloseHandle(handle);
+	}
+	const auto& get() const {
+		return handle;
+	}
+};
+
 namespace Console {
 	constexpr auto FILLER_CHARACTER = ' ';
 	inline auto scroll(SMALL_RECT range, const COORD pos)noexcept(ScrollConsoleScreenBuffer) {
@@ -132,6 +155,15 @@ namespace Console {
 		info.Char.AsciiChar = FILLER_CHARACTER;
 		ScrollConsoleScreenBuffer(GetStdHandle(STD_OUTPUT_HANDLE), &range, nullptr, pos, &info);
 	}
+	inline auto fileName() {
+		char buffer[MAX_PATH];
+		DWORD id;
+		GetWindowThreadProcessId(GetConsoleWindow(), &id);
+		Handle handle(OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, id));
+		std::string path(buffer, GetModuleFileNameExA(handle.get(), nullptr, buffer, MAX_PATH));
+		return std::move(path);
+	}
+
 	inline auto read(const std::size_t size, const COORD pos) {
 		std::string content;
 		DWORD length;
@@ -934,7 +966,7 @@ bool KeyEvent::excute(eventType e) {
 			.emplace<FindEvent>(KEY_EVENT, Console::getTitle())
 			.emplace<FindMouseEvent>(MOUSE_EVENT)
 			.loopA();
-		return false;
+			return false;
 	}
 	const auto pressing_shift = e.KeyEvent.dwControlKeyState & SHIFT_PRESSED;
 	if (pressing_shift && VK_LEFT <= e.KeyEvent.wVirtualKeyCode && e.KeyEvent.wVirtualKeyCode <= VK_DOWN) {
@@ -1033,25 +1065,57 @@ bool KeyEvent::excute(eventType e) {
 	}
 	return false;
 }
-int main() {
-	PostMessage(
-		GetConsoleWindow(),
-		WM_SYSCOMMAND,
-		GetMenuItemID(GetSystemMenu(GetConsoleWindow(), 0), GetMenuItemCount(GetSystemMenu(GetConsoleWindow(), 0)) - 1),
-		0);
-	while (GetConsoleWindow() == GetForegroundWindow());
-	PropSheet_SetCurSel(GetForegroundWindow(),PropSheet_IndexToHwnd(GetForegroundWindow(), 2), 2);
-	while (Button_GetCheck(FindWindowEx(PropSheet_IndexToHwnd(GetForegroundWindow(), 2), FindWindowEx(PropSheet_IndexToHwnd(GetForegroundWindow(), 2), nullptr, TEXT("Button"), nullptr), TEXT("Button"), nullptr)) == BST_CHECKED) {
+
+int main(int argc,char *argv[]) {
+	DWORD value, size = sizeof(value);
+	RegGetValueA(
+		HKEY_CURRENT_USER,
+		std::string("Console\\" + replace(Console::fileName(), "\\", "_")).c_str(),
+		"LineWrap",
+		RRF_RT_REG_DWORD,
+		nullptr,
+		&value,
+		&size);
+	if (value) {
+		//あった方が確実、なくても良い。
+		//あった場合、自動操作が失敗しても再起動時に値が変わっている
+		/*HKEY key;
+		value = 0;
+		RegOpenKeyExA(
+			HKEY_CURRENT_USER,
+			std::string("Console\\" + replace(Console::fileName(), "\\", "_")).c_str(),
+			0,
+			KEY_SET_VALUE,
+			&key
+			);
+		RegSetValueExA(
+			key,
+			"LineWrap",
+			0,
+			REG_DWORD,
+			(LPBYTE)&value,
+			sizeof(size)
+		);
+		RegCloseKey(key);*/
 		PostMessage(
-			FindWindowEx(PropSheet_IndexToHwnd(GetForegroundWindow(), 2), FindWindowEx(PropSheet_IndexToHwnd(GetForegroundWindow(), 2), nullptr, TEXT("Button"), nullptr), TEXT("Button"), nullptr)
-			, WM_KEYDOWN, 'R', 0);
+			GetConsoleWindow(),
+			WM_SYSCOMMAND,
+			GetMenuItemID(GetSystemMenu(GetConsoleWindow(), 0), GetMenuItemCount(GetSystemMenu(GetConsoleWindow(), 0)) - 1),
+			0);
+		while (GetConsoleWindow() == GetForegroundWindow());
+		PropSheet_SetCurSel(GetForegroundWindow(), PropSheet_IndexToHwnd(GetForegroundWindow(), 2), 2);
+		while (Button_GetCheck(FindWindowEx(PropSheet_IndexToHwnd(GetForegroundWindow(), 2), FindWindowEx(PropSheet_IndexToHwnd(GetForegroundWindow(), 2), nullptr, TEXT("Button"), nullptr), TEXT("Button"), nullptr)) == BST_CHECKED) {
+			PostMessage(
+				FindWindowEx(PropSheet_IndexToHwnd(GetForegroundWindow(), 2), FindWindowEx(PropSheet_IndexToHwnd(GetForegroundWindow(), 2), nullptr, TEXT("Button"), nullptr), TEXT("Button"), nullptr)
+				, WM_KEYDOWN, 'R', 0);
+		}
+		SendMessage(
+			GetForegroundWindow(),
+			WM_COMMAND,
+			MAKEWPARAM(GetDlgCtrlID(FindWindowEx(GetForegroundWindow(), nullptr, TEXT("Button"), TEXT("OK"))), BN_CLICKED),
+			(LPARAM)FindWindowEx(GetForegroundWindow(), nullptr, TEXT("Button"), TEXT("OK"))
+		);
 	}
-	SendMessage(
-		GetForegroundWindow(),
-		WM_COMMAND,
-		MAKEWPARAM(GetDlgCtrlID(FindWindowEx(GetForegroundWindow(), nullptr, TEXT("Button"), TEXT("OK"))), BN_CLICKED),
-		(LPARAM)FindWindowEx(GetForegroundWindow(), nullptr, TEXT("Button"), TEXT("OK"))
-	);
 	const auto mode = Console::getMode();
 	Console::setMode(ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);
 	Console::setCodePage(CP_ACP);
@@ -1062,5 +1126,6 @@ int main() {
 	input.emplace<ResizeEvent>(WINDOW_BUFFER_SIZE_EVENT);
 	input.loopA();
 	Console::setMode(mode);
+	Console::Editor::reset();
 	return EXIT_SUCCESS;
 }
